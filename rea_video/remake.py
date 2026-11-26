@@ -366,12 +366,28 @@ def unit_shots(b: dict, results: dict, udir: Path, size: tuple[int, int], fps: f
     return out
 
 
+def _slice_audio_spans(src_audio: Path, spans: list[tuple[float, float]], out_wav: Path) -> Path:
+    """Slice and concatenate `spans` [(start_s, end_s), ...] from `src_audio` into `out_wav`."""
+    filters: list[str] = []
+    labels: list[str] = []
+    for idx, (st, en) in enumerate(spans):
+        filters.append(f"[0:a]atrim=start={st:.4f}:end={en:.4f},asetpts=PTS-STARTPTS[a{idx}]")
+        labels.append(f"[a{idx}]")
+    if len(labels) == 1:
+        fc = f"[0:a]atrim=start={spans[0][0]:.4f}:end={spans[0][1]:.4f},asetpts=PTS-STARTPTS[aout]"
+    else:
+        fc = ";".join(filters) + f";{''.join(labels)}concat=n={len(labels)}:v=0:a=1[aout]"
+    _ff(["-i", str(src_audio), "-filter_complex", fc, "-map", "[aout]", "-ar", "44100", "-ac", "2", str(out_wav)])
+    return out_wav
+
+
 def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = None, overlays: bool = False,
              code_video: Path | None = None, extra: dict | None = None, retime: str = "smooth",
-             audio: Path | None = None) -> str:
+             audio: Path | None = None, only_shots: set[int] | None = None) -> str:
     """code_video: a remake of the code-rendered shots on the original timeline (`code-remake`), cut in for them.
     extra: more {shot: {"video": path}} results on top of results_path's (later ones win).
-    audio: optional external audio track to mux into remake.mp4 and compare.mp4 instead of source audio."""
+    audio: optional external audio track to mux into remake.mp4 and compare.mp4 instead of source audio.
+    only_shots: optional 1-based shot indices to assemble instead of the full timeline."""
     audio_path = Path(audio) if audio is not None else None
     if audio_path is not None and not audio_path.is_file():
         raise FileNotFoundError(audio_path)
@@ -395,11 +411,15 @@ def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = No
     results = {**results, **{str(k): v for k, v in (extra or {}).items()}}
     # unit clips (one call, several shots) become per-shot clips; a shot's own clip, given later, still wins
     bounds = frame_bounds(b["shots"], fps)
+    selected_shots = [sh for sh in b["shots"] if only_shots is None or int(sh["index"]) in only_shots]
+    if not selected_shots:
+        raise ValueError("no shots matched only_shots")
+    is_prefix = [sh["index"] for sh in selected_shots] == [sh["index"] for sh in b["shots"][:len(selected_shots)]]
     results = {**unit_shots(b, results, seg_dir / "units", (w, h), fps, bounds, bdir=bdir),
                **{k: v for k, v in results.items() if not (isinstance(v, dict) and (v.get("unit") or v.get("from_unit")))}}
     parts, legend = [], []
     timing: dict[str, str] = {}  # generated shots: warped onto the original's moves, or fitted evenly
-    for sh in b["shots"]:
+    for sh in selected_shots:
         first, n = bounds[sh["index"]]
         dur = n / fps
         seg = seg_dir / f"shot_{int(sh['index']):03d}.mp4"  # 不用 JSON 里的 id 拼路径，防 ../
@@ -428,7 +448,8 @@ def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = No
     silent = out_dir / "remake_silent.mp4"
     _ff(["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(silent)])
     overlay_log: dict = {}
-    if overlays:
+    apply_overlays = overlays and (only_shots is None or is_prefix)
+    if apply_overlays:
         from .packaging import fit_ass_sizes, to_ass
 
         cues, stickers = overlay_cues(b, replaced_spans(b, legend))
@@ -444,9 +465,27 @@ def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = No
             except subprocess.CalledProcessError as exc:  # ffmpeg built without libass
                 overlay_log["error"] = f"ffmpeg ass filter failed ({exc.returncode}); overlays_remake.ass can be burned in another editor"
                 LOG.warning(overlay_log["error"])
+    compare_ref = src
+    mux_audio = audio_path
+    if only_shots is not None:
+        orig_parts: list[Path] = []
+        for sh in selected_shots:
+            first, n = bounds[sh["index"]]
+            oseg = seg_dir / f"orig_{int(sh['index']):03d}.mp4"
+            _original_segment(src, oseg, first, n, (w, h), fps)
+            orig_parts.append(oseg)
+        olst = seg_dir / "concat_orig.txt"
+        olst.write_text("".join("file '" + str(p.resolve()).replace("'", "'\\''") + "'\n" for p in orig_parts), encoding="utf-8")
+        compare_ref = out_dir / "compare_ref.mp4"
+        _ff(["-f", "concat", "-safe", "0", "-i", str(olst), "-c", "copy", str(compare_ref)])
+        spans = [(bounds[sh["index"]][0] / fps, (bounds[sh["index"]][0] + bounds[sh["index"]][1]) / fps) for sh in selected_shots]
+        if mux_audio is not None:
+            mux_audio = _slice_audio_spans(mux_audio, spans, seg_dir / "audio_subset.wav")
+        elif b["source"].get("has_audio"):
+            mux_audio = _slice_audio_spans(src, spans, seg_dir / "audio_subset.wav")
     final = out_dir / "remake.mp4"
-    if audio_path is not None:
-        _ff(["-i", str(silent), "-i", str(audio_path), "-map", "0:v", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", str(final)])
+    if mux_audio is not None:
+        _ff(["-i", str(silent), "-i", str(mux_audio), "-map", "0:v", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", str(final)])
     elif b["source"].get("has_audio"):
         _ff(["-i", str(silent), "-i", str(src), "-map", "0:v", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-shortest", str(final)])
     else:
@@ -454,11 +493,11 @@ def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = No
     compare = out_dir / "compare.mp4"
     ch = 720 if h >= 720 else h - h % 2
     label = ",drawtext=text='{t}':x=10:y=10:fontcolor=white:box=1:boxcolor=black@0.5"
-    compare_audio_map = "1:a?" if audio_path is not None else "0:a?"
+    compare_audio_map = "1:a?" if (mux_audio is not None or only_shots is not None) else "0:a?"
     for with_text in (True, False):  # drawtext needs libfreetype; fall back to plain hstack
         la, lb = (label.format(t="original"), label.format(t="remake")) if with_text else ("", "")
         try:
-            _ff(["-i", str(src), "-i", str(final), "-filter_complex",
+            _ff(["-i", str(compare_ref), "-i", str(final), "-filter_complex",
                  f"[0:v]scale=-2:{ch}{la}[a];[1:v]scale=-2:{ch}{lb}[b];[a][b]hstack=inputs=2[v]",
                  "-map", "[v]", "-map", compare_audio_map, "-c:v", "libx264", "-crf", "23", "-pix_fmt", "yuv420p", "-shortest", str(compare)])
             break
@@ -466,17 +505,18 @@ def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = No
             if not with_text:
                 raise
     qa_summary: dict | None = None
-    if any(how == "generated" for _, how in legend):
+    if any(how == "generated" for _, how in legend) and (only_shots is None or is_prefix):
         try:
             from .remake_qa import evaluate_remake
 
-            qa_res = evaluate_remake({**b, "source": {**b["source"], "path": str(src)}}, final, out_dir=out_dir, legend=legend, replaced_only=True)
+            qa_shots = selected_shots if only_shots is not None else b["shots"]
+            qa_res = evaluate_remake({**b, "shots": qa_shots, "source": {**b["source"], "path": str(compare_ref)}}, final, out_dir=out_dir, legend=legend, replaced_only=True)
             if qa_res.get("evaluated_shots"):
                 qa_summary = {k: qa_res.get(k) for k in ("evaluated_shots", "score", "camera_score", "motion_score", "layout_score", "smoothness", "issues")}
         except Exception as exc:  # noqa: BLE001  QA diagnostics must never abort assembly
             LOG.warning("remake QA evaluation failed: %s", str(exc)[:120])
     log = {"legend": legend, "remake": str(final), "compare": str(compare), **({"timing": timing} if timing else {}),
-           **({"overlays": overlay_log} if overlays else {}), **({"qa": qa_summary} if qa_summary else {})}
+           **({"overlays": overlay_log} if apply_overlays else {}), **({"qa": qa_summary} if qa_summary else {})}
     (out_dir / "assemble_log.json").write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
     LOG.info("remake -> %s ; compare -> %s", final, compare)
     return json.dumps(log, ensure_ascii=False)

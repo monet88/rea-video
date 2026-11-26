@@ -58,11 +58,29 @@ def _clamp_duration(raw_s: float, lo: int, hi: int) -> int:
     return max(lo, min(hi, int(round(float(raw_s)))))
 
 
+def mine_key_for_task(task: dict[str, Any]) -> str:
+    shots = task["shots"]
+    if len(shots) == 1 and int(task["parts"]) == 1:
+        return str(shots[0])
+    return str(task["id"])
+
+
+def _can_upscale_existing(entry: dict[str, Any] | None, target_upscale: str | None) -> bool:
+    if not target_upscale or not isinstance(entry, dict):
+        return False
+    media_id = str(entry.get("source_media_id") or entry.get("media_id") or "").strip()
+    if not media_id or "_upsampled" in media_id:
+        return False
+    return str(entry.get("upscale") or "").strip().lower() != str(target_upscale).strip().lower()
+
+
 def _mine_key_and_entry(
     task: dict[str, Any],
     out_path: Path,
     trim_to: float,
     bookend: bool,
+    *,
+    cli_res: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     shots = task["shots"]
     task_id = task["id"]
@@ -76,9 +94,14 @@ def _mine_key_and_entry(
         "backend": task["backend"],
         "bookend": bookend,
     }
+    if isinstance(cli_res, dict):
+        for field in ("media_id", "profile", "upscale"):
+            val = cli_res.get(field)
+            if val:
+                base[field] = val
     if len(shots) == 1 and parts == 1:
-        return str(shots[0]), base
-    return task_id, {
+        return mine_key_for_task(task), base
+    return mine_key_for_task(task), {
         **base,
         "unit": task["unit_id"],
         "part": int(task["part"]),
@@ -196,6 +219,8 @@ def _build_flow_cmd(
         cfg.pool_strategy,
         "--json",
     ]
+    if cfg.upscale:
+        cmd.extend(["--upscale", cfg.upscale])
     if cfg.profile:
         cmd.extend(["--profile", cfg.profile])
 
@@ -221,6 +246,36 @@ def _build_flow_cmd(
         raise BridgeError(f"{task_id}: unsupported video strategy {strategy!r}")
 
     return cmd, bookend
+
+
+def _build_flow_upscale_cmd(
+    cli_path: str,
+    cfg: BridgeConfig,
+    aspect: str,
+    media_id: str,
+    out_path: Path,
+    *,
+    profile: str | None = None,
+) -> list[str]:
+    cmd = [
+        cli_path,
+        "upscale",
+        "--media-id",
+        media_id,
+        "--resolution",
+        str(cfg.upscale),
+        "--aspect",
+        aspect,
+        "--output",
+        str(out_path),
+        "--strategy",
+        cfg.pool_strategy,
+        "--json",
+    ]
+    eff_profile = cfg.profile or profile
+    if eff_profile:
+        cmd.extend(["--profile", eff_profile])
+    return cmd
 
 
 def _vids_resolution(res: str | None) -> str:
@@ -346,6 +401,28 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
                 )
                 bookend = not (subject_redesigned and last_rd is None)
             m_key, m_entry = _mine_key_and_entry(task, out_path, trim_to, bookend)
+            existing_entry = results.get(m_key)
+            if task["backend"] == "flow" and _can_upscale_existing(existing_entry, cfg.upscale):
+                cli_path = cli_paths.get("flow") or cli_paths.setdefault("flow", _resolve_cli("flow"))
+                src_media_id = str(existing_entry.get("source_media_id") or existing_entry["media_id"])
+                up_cmd = _build_flow_upscale_cmd(
+                    cli_path,
+                    cfg,
+                    flow_aspect,
+                    src_media_id,
+                    out_path,
+                    profile=existing_entry.get("profile"),
+                )
+                cli_res = _run_cli_json(up_cmd, shot_id=task_id)
+                updated = {**m_entry, **existing_entry, "video": str(out_path.resolve()), "upscale": cfg.upscale, "source_media_id": src_media_id}
+                if cli_res.get("media_id"):
+                    updated["media_id"] = cli_res["media_id"]
+                if cli_res.get("profile"):
+                    updated["profile"] = cli_res["profile"]
+                results[m_key] = updated
+                _save_mine(mine_path, mine_data, results)
+                generated.append(str(out_path))
+                continue
             if m_key not in results:
                 results[m_key] = m_entry
                 _save_mine(mine_path, mine_data, results)
@@ -445,8 +522,8 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
         else:
             raise BridgeError(f"{task_id}: unsupported video backend {backend!r}")
 
-        _run_cli_json(cmd, shot_id=task_id)
-        m_key, m_entry = _mine_key_and_entry(task, out_path, trim_to, bookend)
+        cli_res = _run_cli_json(cmd, shot_id=task_id)
+        m_key, m_entry = _mine_key_and_entry(task, out_path, trim_to, bookend, cli_res=cli_res)
         results[m_key] = m_entry
         _save_mine(mine_path, mine_data, results)
         generated.append(str(out_path))

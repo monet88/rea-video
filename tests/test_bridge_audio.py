@@ -286,4 +286,68 @@ def test_run_assemble_stage_auto_selects_dubbed_mix_unless_keep_original_audio(t
     assert res_keep["audio"] is None
 
 
+def test_run_assemble_stage_forwards_only_shots_and_remake_slices_duration(tmp_path: Path):
+    import subprocess
+    from rea_video import remake
+    from rea_video.bridge_audio import run_assemble_stage
+
+    out_dir = tmp_path / "pkg"
+    rdir = out_dir / "remake"
+    rdir.mkdir(parents=True)
+    src = out_dir / "source.mp4"
+    # Build a tiny 2-second 320x240 10fps synthetic source video with audio
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error",
+        "-f", "lavfi", "-i", "testsrc=duration=2.0:size=320x240:rate=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=2.0",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src),
+    ], check=True)
+    b = {
+        "source": {
+            "path": str(src),
+            "width": 320,
+            "height": 240,
+            "fps": 10.0,
+            "duration": 2.0,
+            "has_audio": True,
+        },
+        "shots": [
+            {"index": 1, "start": 0.0, "end": 1.0, "duration": 1.0, "base": {"label": "live_action"}, "replication": {}},
+            {"index": 2, "start": 1.0, "end": 2.0, "duration": 1.0, "base": {"label": "live_action"}, "replication": {}},
+        ],
+        "production_plan": {"units": [{"id": "G1", "shots": [1]}]},
+    }
+    write_json(out_dir / "breakdown.json", b)
+
+    # 1) run_assemble_stage forwards only_shots={1} when cfg.only="G1"
+    seen: list[dict] = []
+
+    def fake_assemble(*_args, **kwargs):
+        seen.append(kwargs)
+        return json.dumps({"remake": str(rdir / "remake.mp4"), "compare": str(rdir / "compare.mp4"), "legend": [[1, "original"]]})
+
+    with patch("rea_video.remake.assemble", side_effect=fake_assemble):
+        run_assemble_stage(BridgeConfig(out_dir=out_dir, stage="assemble", run=True, only="G1"), b, b["production_plan"])
+    assert seen[0]["only_shots"] == {1}
+
+    # 2) Real remake.assemble(..., only_shots={1}) outputs ~1.0s instead of 2.0s
+    log = json.loads(remake.assemble(out_dir / "breakdown.json", rdir / "results.json", rdir, only_shots={1}))
+    assert [idx for idx, _ in log["legend"]] == [1]
+    dur_str = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", log["remake"]],
+        text=True,
+    ).strip()
+    assert 0.85 <= float(dur_str) <= 1.15
+
+    # 3) Non-prefix only_shots={2} also slices cleanly to ~1.0s and skips prefix-only overlays
+    log2 = json.loads(remake.assemble(out_dir / "breakdown.json", rdir / "results.json", rdir, overlays=True, only_shots={2}))
+    assert [idx for idx, _ in log2["legend"]] == [2]
+    assert "overlays" not in log2
+    dur_str2 = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", log2["remake"]],
+        text=True,
+    ).strip()
+    assert 0.85 <= float(dur_str2) <= 1.15
+
+
 

@@ -508,4 +508,92 @@ def test_flow_video_clamps_1080p_and_packs_multi_refs_in_single_flag(tmp_path):
     assert _opt_multi_values(vids_edit_cmd, "--ref") == ["a.png", "b.png", "c.png"]
 
 
+def test_flow_upscale_flag_persists_media_id_and_upgrades_existing_draft(tmp_path):
+    pkg = _make_video_package(
+        tmp_path,
+        units=[
+            {"id": "G1", "shots": [1], "strategy": "text", "duration": 5.0, "generate_s": 5.0, "calls": 1, "draft": "u1"},
+        ],
+        shots=[
+            {"index": 1, "start": 0.0, "end": 5.0, "duration": 5.0, "base": {"label": "ai_video"}},
+        ],
+    )
+    b = read_json(pkg / "breakdown.json")
+    cmds: list[list[str]] = []
+
+    def fake_run_cli(cmd, *, shot_id=None):
+        cmds.append(cmd)
+        out_p = Path(_opt_values(cmd, "--output")[0])
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_bytes(b"mp4-data")
+        if cmd[1] == "upscale":
+            return {"ok": True, "path": str(out_p), "media_id": "mid-1_upsampled", "profile": "baothangvt"}
+        return {"ok": True, "path": str(out_p), "media_id": "mid-1", "profile": "baothangvt"}
+
+    # 1) Draft 360p run persists media_id and profile
+    cfg_draft = BridgeConfig(out_dir=pkg, stage="video", run=True, resolution="360p")
+    with (
+        patch("rea_video.bridge_video._resolve_cli", return_value="flow.cmd"),
+        patch("rea_video.bridge_video._run_cli_json", side_effect=fake_run_cli),
+    ):
+        run_video_stage(cfg_draft, b, b["production_plan"])
+    mine = read_json(pkg / "remake" / "mine.json")["results"]
+    assert mine["1"]["media_id"] == "mid-1"
+    assert mine["1"]["profile"] == "baothangvt"
+    assert "upscale" not in mine["1"]
+
+    # 2) Re-run with upscale="1080p" (without --force) upgrades existing draft via `flow upscale`
+    cmds.clear()
+    cfg_up = BridgeConfig(out_dir=pkg, stage="video", run=True, resolution="360p", upscale="1080p")
+    with (
+        patch("rea_video.bridge_video._resolve_cli", return_value="flow.cmd"),
+        patch("rea_video.bridge_video._run_cli_json", side_effect=fake_run_cli),
+    ):
+        res_up = run_video_stage(cfg_up, b, b["production_plan"])
+    assert len(cmds) == 1
+    assert cmds[0][:2] == ["flow.cmd", "upscale"]
+    assert _opt_values(cmds[0], "--media-id") == ["mid-1"]
+    assert _opt_values(cmds[0], "--resolution") == ["1080p"]
+    assert _opt_values(cmds[0], "--profile") == ["baothangvt"]
+    assert len(res_up["generated"]) == 1
+    mine2 = read_json(pkg / "remake" / "mine.json")["results"]
+    assert mine2["1"]["media_id"] == "mid-1_upsampled"
+    assert mine2["1"]["source_media_id"] == "mid-1"
+    assert mine2["1"]["upscale"] == "1080p"
+
+    # 3) Repeat upscale run with same target skips cleanly
+    cmds.clear()
+    with (
+        patch("rea_video.bridge_video._resolve_cli", return_value="flow.cmd"),
+        patch("rea_video.bridge_video._run_cli_json", side_effect=fake_run_cli),
+    ):
+        res_skip = run_video_stage(cfg_up, b, b["production_plan"])
+    assert cmds == []
+    assert len(res_skip["skipped"]) == 1
+
+    # 3b) Upgrading 1080p -> 4k reuses source_media_id ("mid-1"), not "mid-1_upsampled"
+    cmds.clear()
+    cfg_4k = BridgeConfig(out_dir=pkg, stage="video", run=True, resolution="360p", upscale="4k")
+    with (
+        patch("rea_video.bridge_video._resolve_cli", return_value="flow.cmd"),
+        patch("rea_video.bridge_video._run_cli_json", side_effect=fake_run_cli),
+    ):
+        run_video_stage(cfg_4k, b, b["production_plan"])
+    assert len(cmds) == 1
+    assert cmds[0][:2] == ["flow.cmd", "upscale"]
+    assert _opt_values(cmds[0], "--media-id") == ["mid-1"]
+    assert _opt_values(cmds[0], "--resolution") == ["4k"]
+
+    # 4) Direct --upscale 1080p on fresh run passes --upscale to `flow video`
+    cmds.clear()
+    cfg_direct = BridgeConfig(out_dir=pkg, stage="video", run=True, resolution="720p", upscale="1080p", force=True)
+    with (
+        patch("rea_video.bridge_video._resolve_cli", return_value="flow.cmd"),
+        patch("rea_video.bridge_video._run_cli_json", side_effect=fake_run_cli),
+    ):
+        run_video_stage(cfg_direct, b, b["production_plan"])
+    assert cmds[0][:2] == ["flow.cmd", "video"]
+    assert _opt_values(cmds[0], "--upscale") == ["1080p"]
+
+
 

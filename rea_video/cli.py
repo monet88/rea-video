@@ -897,6 +897,7 @@ def cmd_bridge(args) -> int:
         image_model=args.image_model,
         video_backend=args.video_backend,
         resolution=args.resolution,
+        upscale=args.upscale,
         avatar=args.avatar,
         pool_strategy=args.pool_strategy,
         profile=args.profile,
@@ -1248,6 +1249,7 @@ def main(argv: list[str] | None = None) -> int:
     br.add_argument("--image-model", help="gateway 图片模型（默认 $REA_IMAGE_MODEL 或 gpt-image-2.6-sunburst）")
     br.add_argument("--video-backend", choices=["flow", "vids"], default="flow", help="视频生成后端（默认 flow；avatar 镜头自动走 vids）")
     br.add_argument("--resolution", default="720p", help="视频分辨率（如 360p / 720p / 1080p，默认 720p）")
+    br.add_argument("--upscale", choices=["720p", "1080p", "4k"], help="Flow 后处理超分分辨率（1080p ≤10s 免费，4k 消耗 Ultra 积分；也可对已有 360p/720p 草稿直接升级）")
     br.add_argument("--avatar", help="传给 vids 的数字人角色名")
     br.add_argument("--pool-strategy", choices=["fill-first", "round-robin"], default="fill-first", help="flow/vids/gptimg 账号池调度策略（默认 fill-first）")
     br.add_argument("--profile", help="指定 ShardBrowser 账号 profile 名称")

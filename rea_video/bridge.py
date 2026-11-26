@@ -38,6 +38,7 @@ class BridgeConfig:
     image_model: str | None = None
     video_backend: str = "flow"
     resolution: str = "720p"
+    upscale: str | None = None
     avatar: str | None = None
     pool_strategy: str = "fill-first"
     profile: str | None = None
@@ -446,11 +447,13 @@ def _video_backend_for_unit(unit: dict, shots_by_idx: dict[int, dict], cfg: Brid
 
 def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
     """Preview planned images, video, audio, and assemble work without calling any external API, CLI, or FFmpeg."""
-    from .bridge_video import _flow_resolution, _vids_resolution, collect_video_tasks
+    from .bridge_video import _can_upscale_existing, _flow_resolution, _vids_resolution, collect_video_tasks, mine_key_for_task
 
     out_dir = Path(cfg.out_dir)
     only_shots = parse_only(cfg.only, units=plan.get("units"))
     selected = list(STAGES) if cfg.stage == "all" else [cfg.stage]
+    mine_path = out_dir / "remake" / "mine.json"
+    mine_results = (read_json(mine_path).get("results") or {}) if mine_path.is_file() else {}
 
     img_tasks_preview: list[dict[str, Any]] = []
     for t in plan.get("image_tasks") or []:
@@ -469,18 +472,30 @@ def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
             "would_skip": bool(exists and not cfg.force),
         })
 
-    units_preview: list[dict[str, Any]] = [
-        {
+    units_preview: list[dict[str, Any]] = []
+    for t in collect_video_tasks(b, out_dir, cfg, plan=plan):
+        out_exists = Path(t["output"]).is_file()
+        existing_entry = mine_results.get(mine_key_for_task(t))
+        would_upscale = bool(
+            out_exists
+            and not cfg.force
+            and t["backend"] == "flow"
+            and _can_upscale_existing(existing_entry, cfg.upscale)
+        )
+        entry_preview: dict[str, Any] = {
             "id": t["id"],
             "shots": t["shots"],
             "strategy": t["strategy"],
             "backend": t["backend"],
             "resolution": _vids_resolution(cfg.resolution) if t["backend"] == "vids" else _flow_resolution(cfg.resolution),
             "output": str(t["output"]),
-            "would_skip": bool(Path(t["output"]).is_file() and not cfg.force),
+            "would_skip": bool(out_exists and not cfg.force and not would_upscale),
         }
-        for t in collect_video_tasks(b, out_dir, cfg, plan=plan)
-    ]
+        if t["backend"] == "flow" and cfg.upscale:
+            entry_preview["upscale"] = cfg.upscale
+        if would_upscale:
+            entry_preview["action"] = "upscale"
+        units_preview.append(entry_preview)
 
     if cfg.dubbing_script:
         sp = Path(cfg.dubbing_script)
@@ -523,6 +538,7 @@ def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
             "retime": cfg.retime,
             "overlays": not cfg.no_overlays,
             "keep_original_audio": cfg.keep_original_audio,
+            **({"only_shots": sorted(only_shots)} if only_shots is not None else {}),
         },
     }
 

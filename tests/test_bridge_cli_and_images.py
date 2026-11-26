@@ -644,3 +644,19 @@ def test_bridge_t2i_own_refs_parity_and_pure_t2i_omits_source_frame(tmp_path, mo
     assert gw_calls[0][0] == "https://img.example.com/v1/images/edits"
     assert b"own-product-bytes" in gw_calls[0][1]
 
+
+def test_bridge_dry_run_shows_upscale_action_and_only_shots(tmp_path, capsys):
+    pkg = _make_package(tmp_path)
+    vid = pkg / "remake" / "bridge" / "video" / "G1.mp4"
+    vid.parent.mkdir(parents=True, exist_ok=True)
+    vid.write_bytes(b"draft-360p")
+    write_json(pkg / "remake" / "mine.json", {"results": {"1": {"video": str(vid), "media_id": "mid-1", "profile": "baothangvt"}}})
+
+    rc = cli.main(["bridge", str(pkg), "--only", "1", "--upscale", "1080p"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["video"]["units"][0]["upscale"] == "1080p"
+    assert out["video"]["units"][0]["action"] == "upscale"
+    assert out["video"]["units"][0]["would_skip"] is False
+    assert out["assemble"]["only_shots"] == [1]
+

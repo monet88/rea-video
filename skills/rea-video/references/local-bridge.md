@@ -5,9 +5,9 @@
 ## 能做什么
 
 - **Images 阶段**（`--stage images`）：按 `production_plan.image_tasks` 重绘首帧 / 尾帧到 `remake/redrawn/`；支持 `gateway`（OpenAI `/v1/images/*` 如 `gpt-image-2.6-sunburst`，以及 Gemini `:generateContent` 如 `gemini-3.1-flash-image`）、`gptimg`、`flow`。
-- **Video 阶段**（`--stage video`）：按生成单元自动路由 `flow video`（`edit` / `remix` / `keyframes` / `frames` / `text`）或 `vids`（`avatar` 镜头自动走 `vids`，也可传 `--video-backend vids`），输出 `remake/bridge/video/*.mp4` 并增量写入 `remake/mine.json`。
+- **Video 阶段**（`--stage video`）：按生成单元自动路由 `flow video`（`edit` / `remix` / `keyframes` / `frames` / `text`）或 `vids`（`avatar` 镜头自动走 `vids`，也可传 `--video-backend vids`），输出 `remake/bridge/video/*.mp4` 并增量写入 `remake/mine.json`（含 `media_id` / `profile`）。支持 `--upscale 720p|1080p|4k`：可直接生成时超分，也可先 `--resolution 360p` 出草稿后再带 `--upscale 1080p` 对已有 `media_id` 零积分（≤10s）升级。
 - **Audio 阶段**（`--stage audio`）：导出 `remake/dubbing_script.json`，可选 `--clone-source-voices` 从分离人声截取 5 秒样本向本地 `VieNeu-TTS`（默认 `http://127.0.0.1:8000` 或 `$REA_TTS_BASE_URL`）注册音色、合成配音并混音为 `remake/bridge/audio/dubbed_mix.wav`。
-- **Assemble 阶段**（`--stage assemble`）：调用内置 `remake.assemble` 拼回 `remake/remake.mp4` 和 `remake/compare.mp4`，若存在 `dubbed_mix.wav` 且未传 `--keep-original-audio` 则自动挂载配音音轨。
+- **Assemble 阶段**（`--stage assemble`）：调用内置 `remake.assemble` 拼回 `remake/remake.mp4` 和 `remake/compare.mp4`（支持 `--only 1` / `--only G1` 只拼装指定镜头子集），若存在 `dubbed_mix.wav` 且未传 `--keep-original-audio` 则自动挂载配音音轨。
 
 ## 安全与环境配置
 

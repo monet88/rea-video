@@ -343,6 +343,7 @@ def run_audio_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
 def run_assemble_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dict[str, Any]:
     """Assemble remake/mine.json with optional dubbed_mix.wav unless keep_original_audio is set."""
     from . import remake
+    from .bridge import parse_only
 
     out_dir = Path(cfg.out_dir)
     rdir = out_dir / "remake"
@@ -352,16 +353,23 @@ def run_assemble_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> 
     code_video = out_dir / "code" / "remake.mp4"
     dubbed_mix = rdir / "bridge" / "audio" / "dubbed_mix.wav"
     audio = dubbed_mix if (dubbed_mix.is_file() and not cfg.keep_original_audio) else None
+    units = (plan or b.get("production_plan") or {}).get("units")
+    only_shots = parse_only(cfg.only, units=units)
+    assemble_kwargs: dict[str, Any] = {
+        "overlays": not cfg.no_overlays,
+        "code_video": code_video if code_video.is_file() else None,
+        "extra": extra,
+        "retime": cfg.retime,
+        "audio": audio,
+    }
+    if only_shots is not None:
+        assemble_kwargs["only_shots"] = only_shots
 
     log_raw = remake.assemble(
         out_dir / "breakdown.json",
         rdir / "results.json",
         rdir,
-        overlays=not cfg.no_overlays,
-        code_video=code_video if code_video.is_file() else None,
-        extra=extra,
-        retime=cfg.retime,
-        audio=audio,
+        **assemble_kwargs,
     )
     parsed = json.loads(log_raw) if isinstance(log_raw, str) else dict(log_raw)
     return {

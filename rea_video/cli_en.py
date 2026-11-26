@@ -177,6 +177,7 @@ HELP = {
     "bridge.image_model": "gateway image model (defaults to $REA_IMAGE_MODEL or gpt-image-2.6-sunburst)",
     "bridge.video_backend": "video generation backend: flow (default; avatar shots route to vids) / vids",
     "bridge.resolution": "output video resolution (e.g. 360p / 720p / 1080p, default 720p)",
+    "bridge.upscale": "post-generation Flow upscale target (720p / 1080p / 4k; upgrades existing 360p/720p drafts via media_id)",
     "bridge.avatar": "avatar name passed to vids",
     "bridge.pool_strategy": "profile pool strategy for flow/vids/gptimg: fill-first (default) / round-robin",
     "bridge.profile": "specific ShardBrowser profile name",
