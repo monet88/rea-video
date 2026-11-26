@@ -578,3 +578,69 @@ def test_bridge_gemini_image_generate_content_t2i_i2i_anchor_and_refusal(tmp_pat
     assert rc_fail == 2
     err = capsys.readouterr().err
     assert "shot_001" in err and "cannot render policy" in err
+
+
+def test_bridge_t2i_own_refs_parity_and_pure_t2i_omits_source_frame(tmp_path, monkeypatch):
+    import base64
+
+    pkg = _make_package(tmp_path)
+    monkeypatch.setenv("REA_IMAGE_API_BASE", "https://img.example.com")
+    monkeypatch.setenv("REA_IMAGE_API_KEY", "img-key")
+
+    # 1) Pure T2I with only source_frame (no own_refs): neither gateway nor flow sends source_frame as a ref
+    seen_flow_cmds = []
+
+    class FakeProc:
+        returncode = 0
+        stdout = json.dumps({"ok": True})
+        stderr = ""
+
+    def fake_run(cmd, **_kw):
+        seen_flow_cmds.append(cmd)
+        Path(cmd[cmd.index("--output") + 1]).write_bytes(b"flow-img")
+        return FakeProc()
+
+    with patch("shutil.which", return_value="C:\\bin\\flow.cmd"), patch("subprocess.run", side_effect=fake_run):
+        assert cli.main(["bridge", str(pkg), "--stage", "images", "--image-backend", "flow", "--run"]) == 0
+    assert "--ref" not in seen_flow_cmds[0]
+
+    # 2) T2I with own_refs: both flow (--ref) and gateway (/v1/images/edits) send own_refs
+    own_ref = tmp_path / "product.png"
+    own_ref.write_bytes(b"own-product-bytes")
+    bpath = pkg / "breakdown.json"
+    b = json.loads(bpath.read_text(encoding="utf-8"))
+    b["production_plan"]["own_refs"] = [{"path": str(own_ref)}]
+    write_json(bpath, b)
+
+    seen_flow_cmds.clear()
+    with patch("shutil.which", return_value="C:\\bin\\flow.cmd"), patch("subprocess.run", side_effect=fake_run):
+        assert cli.main(["bridge", str(pkg), "--stage", "images", "--image-backend", "flow", "--force", "--run"]) == 0
+    assert "--ref" in seen_flow_cmds[0]
+    assert str(own_ref) in seen_flow_cmds[0]
+
+    gw_calls = []
+
+    class FakeResp:
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    b64 = base64.b64encode(b"gw-png").decode("ascii")
+
+    def fake_urlopen(req, timeout=180.0):
+        gw_calls.append((req.full_url, req.data))
+        return FakeResp(json.dumps({"data": [{"b64_json": b64}]}).encode("utf-8"))
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        assert cli.main(["bridge", str(pkg), "--stage", "images", "--image-backend", "gateway", "--force", "--run"]) == 0
+    assert gw_calls[0][0] == "https://img.example.com/v1/images/edits"
+    assert b"own-product-bytes" in gw_calls[0][1]
+

@@ -14,6 +14,7 @@ from typing import Any
 
 from . import entities
 from .bridge import BridgeConfig, BridgeError, _encode_multipart, urlopen_bytes
+from .media import duration_s
 from .util import clamp, read_json, write_json
 
 DEFAULT_TTS_URL = "http://127.0.0.1:8000"
@@ -169,34 +170,9 @@ def _run_ffmpeg(args: list[str]) -> None:
 
 def _probe_audio_duration(path: Path) -> float:
     """Measure WAV duration via audio-stream ffprobe, falling back to stdlib wave."""
-    proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=duration:format=duration",
-            "-of",
-            "json",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if proc.returncode == 0 and proc.stdout:
-        try:
-            data = json.loads(proc.stdout)
-            for container in ((data.get("streams") or [{}])[0], data.get("format") or {}):
-                val = container.get("duration") if isinstance(container, dict) else None
-                if val is not None and float(val) > 0:
-                    return float(val)
-        except (ValueError, TypeError, IndexError):
-            pass
+    d = duration_s(path, stream="a:0")
+    if d > 0:
+        return d
     try:
         with wave.open(str(path), "rb") as wf:
             rate = wf.getframerate()

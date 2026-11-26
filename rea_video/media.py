@@ -52,9 +52,9 @@ def ffprobe(path: str | Path) -> dict:
     return json.loads(out)
 
 
-def duration_s(path: str | Path) -> float:
-    """A file's length in seconds: the container's, else its video stream's; 0.0 when neither can be read."""
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=duration",
+def duration_s(path: str | Path, *, stream: str = "v:0") -> float:
+    """A file's length in seconds: the container's, else the selected stream's; 0.0 when neither can be read."""
+    cmd = ["ffprobe", "-v", "error", "-select_streams", stream, "-show_entries", "format=duration:stream=duration",
            "-of", "json", str(path)]
     try:
         data = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout or "{}")

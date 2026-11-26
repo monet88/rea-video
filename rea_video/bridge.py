@@ -243,11 +243,12 @@ def _collect_task_refs(out_dir: Path, task: dict, plan: dict) -> list[Path]:
             add_if_file(redrawn_frame(out_dir, f"shot{int(m.group(1)):03d}"))
 
     img_ref = str(task.get("image_ref") or "auto").strip().lower()
+    method = str(task.get("method") or "t2i").strip().lower()
     if img_ref in ("source", "depth", "edge"):
         suffix = "clean" if img_ref == "source" else img_ref
         add_if_file(out_dir / "remake" / "refs" / f"shot{shot_idx:03d}_{suffix}.jpg")
 
-    if img_ref != "none":
+    if img_ref != "none" and (method == "i2i" or img_ref in ("source", "depth", "edge")):
         add_if_file(task.get("source_frame"))
 
     for own in plan.get("own_refs") or []:
@@ -267,12 +268,11 @@ def _build_gemini_image_request(
     prompt: str,
     aspect: str,
     ref_paths: list[Path],
-    method: str,
 ) -> tuple[str, bytes, dict[str, str]]:
     root_base = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
     url = f"{root_base}/v1beta/models/{model}:generateContent"
     parts: list[dict[str, Any]] = [{"text": prompt}]
-    if method == "i2i" and ref_paths:
+    if ref_paths:
         for p in ref_paths:
             mime, _ = mimetypes.guess_type(str(p))
             if not mime or not mime.startswith("image/"):
@@ -314,7 +314,6 @@ def _gateway_image_request(
     prompt: str,
     size: str,
     ref_paths: list[Path],
-    method: str,
     shot_id: str,
     *,
     aspect: str = "1:1",
@@ -322,9 +321,9 @@ def _gateway_image_request(
     """Call OpenAI-compatible /images/* or Gemini :generateContent and return image bytes."""
     is_gemini = _is_gemini_image_model(model)
     if is_gemini:
-        url, body, headers = _build_gemini_image_request(base_v1, api_key, model, prompt, aspect, ref_paths, method)
+        url, body, headers = _build_gemini_image_request(base_v1, api_key, model, prompt, aspect, ref_paths)
     else:
-        if method == "i2i" and ref_paths:
+        if ref_paths:
             url = f"{base_v1}/images/edits"
             field = "image" if len(ref_paths) == 1 else "image[]"
             body, content_type = _encode_multipart(
@@ -391,7 +390,6 @@ def run_images_stage(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
 
         target.parent.mkdir(parents=True, exist_ok=True)
         prompt = str(task.get("prompt") or "").strip()
-        method = str(task.get("method") or "t2i").strip().lower()
         ref_paths = _collect_task_refs(out_dir, task, plan)
 
         if cfg.image_backend == "gateway":
@@ -399,7 +397,7 @@ def run_images_stage(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
                 gw_cfg = resolve_gateway_config(cfg.image_model)
             base_v1, api_key, model = gw_cfg
             img_bytes = _gateway_image_request(
-                base_v1, api_key, model, prompt, size, ref_paths, method, shot_id, aspect=cli_aspect
+                base_v1, api_key, model, prompt, size, ref_paths, shot_id, aspect=cli_aspect
             )
             target.write_bytes(img_bytes)
         elif cfg.image_backend in ("gptimg", "flow"):

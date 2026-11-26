@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,7 +9,7 @@ import numpy as np
 import pytest
 
 from rea_video import cli, gemini, moments, pipeline, vlm
-from rea_video.shots import FrameTrack, Shot
+from rea_video.shots import Shot
 
 
 def test_make_client_prefer_gemini_overrides_rea_vlm(monkeypatch, tmp_path):

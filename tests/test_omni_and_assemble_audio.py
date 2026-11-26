@@ -126,3 +126,11 @@ def test_cli_assemble_audio_flag_and_help(tmp_path: Path) -> None:
     assert _has_audio_stream(out_dir / "compare.mp4")
 
 
+def test_cli_assemble_warp_rejects_audio(tmp_path: Path, capsys) -> None:
+    bpath, rpath, dub = _make_media(tmp_path, source_has_audio=False)
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["assemble", str(bpath), str(rpath), "--retime", "warp", "--audio", str(dub)])
+    assert exc.value.code != 0
+    assert "--audio" in str(exc.value)
+
+

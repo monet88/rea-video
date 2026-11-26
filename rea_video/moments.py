@@ -23,8 +23,12 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .gemini import YouTubeClip
 
 from .i18n import LangDict, T
 from .util import LOG, fmt_time, read_json, write_json

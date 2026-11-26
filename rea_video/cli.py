@@ -458,6 +458,11 @@ def cmd_assemble(args) -> int:
                                            "-o", str(Path(log["remake"]).parent / "qa")])
         return 0
     argv = ["assemble", str(pkg), "--results", str(rpath)]
+    if getattr(args, "audio", None):
+        raise SystemExit(U(
+            "rea-video: --audio 仅支持本地 --retime smooth 拼装（capsule-cinema 的 --retime warp 不支持外部音轨）",
+            "rea-video: --audio is only supported with local --retime smooth assembly (--retime warp delegates to capsule-cinema)",
+        ))
     argv += ["-o", str(Path(args.out).expanduser().resolve())] if args.out else []
     return _capsule_command(args, argv + ([] if args.overlays else ["--no-overlays"]))
 
@@ -787,7 +792,7 @@ def cmd_plan(args) -> int:
     from .integrations.capsule_cinema import ref_clips
     from .pipeline import finalize
     from .plan import CAP, Planner, user_capabilities
-    from .production import _norm, pick_model
+    from .production import _norm
 
     out = Path(args.out_dir)
     intent = load_intent(out)

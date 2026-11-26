@@ -4,14 +4,14 @@
 - 用户要拆解视频、判断制作方式、标真实素材、拆音乐音效、复刻时，**先读 `skills/rea-video/SKILL.md`**，按里面的流程做，并复核低置信镜头。
 - 仓库分工：
   - `skills/rea-video/`：给 agent 用的 skill（流程 + references），只写怎么用，不放开发文档
-  - `rea_video/`：CLI 和拆解逻辑；模型能力地图在 `rea_video/capabilities/`，capsule-cinema 对接脚本在 `rea_video/integrations/`
+  - `rea_video/`：CLI 和拆解逻辑；本地桥接在 `rea_video/bridge*.py`，模型能力地图在 `rea_video/capabilities/`，capsule-cinema 对接脚本在 `rea_video/integrations/`
   - `docs/`：给人看的文档；`docs/dev/` 是开发文档（扩充评测集、加拍法维度）
   - `eval/`：本地评测集（只有 `eval/RESULTS.md` 进仓库）；`tests/`：单元测试（随本 fork 仓库追踪）
 - 开发约定：
   - 开发环境：`pip install -e ".[ocr,dev]"`（dev 带 pytest 和 jsonschema，测试和能力地图校验要用）
-  - 规则改动后跑 `python3 -m pytest -q` 和 `rea-video eval eval/labels.yaml` / `eval/holdout*.yaml`，结果更新到 `eval/RESULTS.md`
+  - 规则改动后跑 `ruff check rea_video tests`、`python -m pytest -q` 和 `rea-video eval eval/labels.yaml` / `eval/holdout*.yaml`，结果更新到 `eval/RESULTS.md`
   - 能力地图改完跑 `python3 scripts/validate_capabilities.py --matrix`
-- 不要提交任何密钥；VLM 配置通过 `--env-file` 读取。
+- 配置与密钥通过 `--env-file` 或 `rea-video prefs env_file` 加载，不写入仓库或日志。
 
 ## Agent skills
 
@@ -26,3 +26,7 @@ Canonical five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`,
 ### Domain docs
 
 Single-context layout (`GLOSSARY.md` and `docs/adr/` at the repo root). See `docs/agents/domain.md`.
+
+### Coding standards
+
+Review-time judgement rules live in `CODING_STANDARDS.md`.
