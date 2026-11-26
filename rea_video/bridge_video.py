@@ -26,7 +26,7 @@ from .integrations import capsule_cinema
 from .util import read_json, write_json
 
 _FLOW_MAX_REFS = 10
-_VIDS_EDIT_MAX_REFS = 7
+_VIDS_EDIT_MAX_REFS = 3
 _VIDS_CREATE_MAX_INGREDIENTS = 3
 
 

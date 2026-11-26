@@ -491,5 +491,21 @@ def test_flow_video_clamps_1080p_and_packs_multi_refs_in_single_flag(tmp_path):
     assert vids_cmd.count("--ingredients") == 1
     assert _opt_multi_values(vids_cmd, "--ingredients") == ["a.png", "b.png"]
 
+    vids_edit_cmd, _ = _build_vids_cmd(
+        "vids.cmd",
+        cfg,
+        "9:16",
+        "prompt",
+        "edit",
+        5.0,
+        tmp_path / "g1.mp4",
+        is_avatar=False,
+        ref_clip="clip.mp4",
+        refs=["a.png", "b.png", "c.png", "d.png", "e.png"],
+        first_frame=None,
+        task_id="G1",
+    )
+    assert _opt_multi_values(vids_edit_cmd, "--ref") == ["a.png", "b.png", "c.png"]
+
 
 
