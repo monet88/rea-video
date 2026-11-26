@@ -12,3 +12,17 @@
   - 规则改动后跑 `python3 -m pytest -q` 和 `rea-video eval eval/labels.yaml` / `eval/holdout*.yaml`，结果更新到 `eval/RESULTS.md`
   - 能力地图改完跑 `python3 scripts/validate_capabilities.py --matrix`
 - 不要提交任何密钥；VLM 配置通过 `--env-file` 读取。
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `monet88/rea-video` (via `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout (`GLOSSARY.md` and `docs/adr/` at the repo root). See `docs/agents/domain.md`.
