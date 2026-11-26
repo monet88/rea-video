@@ -130,7 +130,7 @@ rea-video summary out/ref/breakdown.json      # 用并入后的结果写回复
 
 用户要自己动手做时，先给报告第二部分「照着做」的步骤，不要先讲模型规则和输入表。
 
-先跑 `rea-video remake out/ref`：能自动做的镜头先做掉（静图重建；代码渲染默认原片占位，加 `--code` 出快速草稿），其余原片占位，拼回原时间线，`remake/status.md` 逐镜写了还要做什么；拿到新镜头写进 `remake/mine.json` 再跑一次。细节见 `references/remake.md`；可用的工具和方式（capsule-cinema、ChatCut、写代码重做、自己动手）和各自的特点列在 `references/remake-tools.md`。在本工具里直接跑：AI 镜头走 capsule-cinema（会计费，先 `rea-video remake-run --dry-run` 并征得用户同意）；实拍给拍摄方案；舞蹈 / 动作镜头用 `rea-video drive out/ref` 出驱动视频（见 `references/remake.md`）；代码渲染建议交给 HTML 视频框架（如 HyperFrames）按 `video/rhythm.md` 的节奏和关键帧重做，`rea-video code-remake out/ref` 只出粒子 / 数据可视化这类画面的快速草稿；用户自己的素材用 `rea-video assemble` 拼回原时间线。代码渲染和用户自己的素材也可以在 ChatCut 里做。
+先跑 `rea-video remake out/ref`：能自动做的镜头先做掉（静图重建；代码渲染默认原片占位，加 `--code` 出快速草稿），其余原片占位，拼回原时间线，`remake/status.md` 逐镜写了还要做什么；拿到新镜头写进 `remake/mine.json` 再跑一次。细节见 `references/remake.md`；可用的工具和方式（capsule-cinema、本地桥接 `rea-video bridge`、ChatCut、写代码重做、自己动手）和各自的特点列在 `references/remake-tools.md`。在本工具里直接跑：AI 镜头与本地配音 / 拼装可用 `rea-video bridge out/ref`（默认 `--dry-run` 预览，用户确认后加 `--run`；见 `references/local-bridge.md`），或走 capsule-cinema（会计费，先 `rea-video remake-run --dry-run` 并征得用户同意）；实拍给拍摄方案；舞蹈 / 动作镜头用 `rea-video drive out/ref` 出驱动视频（见 `references/remake.md`）；代码渲染建议交给 HTML 视频框架（如 HyperFrames）按 `video/rhythm.md` 的节奏和关键帧重做，`rea-video code-remake out/ref` 只出粒子 / 数据可视化这类画面的快速草稿；用户自己的素材用 `rea-video assemble` 拼回原时间线。代码渲染和用户自己的素材也可以在 ChatCut 里做。
 
 ## 参考文件
 
@@ -146,6 +146,7 @@ rea-video summary out/ref/breakdown.json      # 用并入后的结果写回复
 | `references/remake-tools.md` | 复刻可以用哪些工具和方式，告诉用户有哪些可选 |
 | `references/chatcut.md` | 用户要用 ChatCut 时：能做什么、费用、怎么装好接上 |
 | `references/capsule-cinema.md` | 用户要用 capsule-cinema 时：费用、安装、出任务和生成 |
+| `references/local-bridge.md` | 不用 capsule-cinema 时：本地 `rea-video bridge` 四阶段生图、生视频、配音与拼装 |
 | `references/code-render.md` | 代码渲染 / MG / 插画动画类镜头写代码重做：用什么模型、可参考的框架（HyperFrames、Remotion）、给它什么 |
 | `references/diy.md` | 用户自己拍或手动生成时：费用、怎么把素材拼回原时间线 |
 | `references/memory.md` | 记住纠正和偏好 |

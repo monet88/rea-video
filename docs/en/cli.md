@@ -96,6 +96,17 @@ rea-video capsule-draft out/ref/breakdown.json --capsule-root $CC --capsule-name
 
 See [capsule-cinema.md](capsule-cinema.md).
 
+## Local remake bridge (without capsule-cinema)
+
+```bash
+rea-video plan out/ref --model gemini-omni-flash
+rea-video bridge out/ref --dry-run                                               # dry-run preview by default; no external calls
+rea-video bridge out/ref --stage images --image-backend gateway --run            # redraw key frames (gpt-image-2.6-* / gemini-*-image*, or --image-backend gptimg/flow)
+rea-video bridge out/ref --stage video --video-backend flow --run                # generate video units (avatar shots route to vids, or pass --video-backend vids)
+rea-video bridge out/ref --stage audio --clone-source-voices --run               # synthesize dubbed_mix.wav via local VieNeu-TTS
+rea-video bridge out/ref --stage assemble --run                                  # assemble remake.mp4 / compare.mp4; equivalent to assemble <breakdown.json> <results.json> --audio <dubbed_mix.wav>
+```
+
 ## Commands
 
 | Command | What it does |
@@ -123,7 +134,8 @@ See [capsule-cinema.md](capsule-cinema.md).
 | `models [ID]` | Lists generation models in the capability map. With an id, prints that model's prompt format and key-frame requirements (`models keyframes` prints the general key-frame guide). Models added in `~/.rea-video/capabilities/models/*.yaml` are listed too |
 | `plan OUT_DIR [--model ID] [--generate ai\|all]` | Builds part two of the report from the remake intent `remake/intent.yaml` (model, whole video or AI shots only, what to swap): generation units, inputs per call, draft prompts and plan checks. Final per-model prompts in `remake/prompts.json` are format-checked. The breakdown itself doesn't change |
 | `remake-plan` | Writes the plan's generation units as jobs and handoff files |
-| `remake` / `assemble` | Hand off to capsule-cinema to assemble the remake and check it |
+| `remake` / `assemble [--audio WAV]` | Assembles the remake locally or via capsule-cinema and checks it (`--audio` replaces the muxed audio track) |
+| `bridge OUT_DIR [--stage images\|video\|audio\|assemble\|all] [--run]` | Local 4-stage remake bridge (`--dry-run` by default; pass `--run` for gateway/`gptimg`/`flow` images, `flow`/`vids` video, `VieNeu-TTS` dubbing, and local assembly) |
 | `remake-run JOBS [--dry-run] [--only G2\|2,5\|shot_002] [--capsule-root]` | Hands remake jobs to capsule-cinema (billed). Exits non-zero if any job produced no video |
 | `capsule-draft breakdown.json` | Generates a capsule-cinema capsule draft |
 

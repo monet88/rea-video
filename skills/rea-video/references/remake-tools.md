@@ -5,6 +5,7 @@
 | 方式 | 是什么 | 能做什么 | 使用条件 |
 |---|---|---|---|
 | [capsule-cinema](https://github.com/JuneYaooo/capsule-cinema) | 开源的本地生成流程 | 按拆解结果逐镜生成 AI 镜头，拼回原时间线；`rea-video remake-plan` / `remake-run` 直接对接 | 本地部署，模型和密钥自己配，按模型调用计费 |
+| 本地桥接（`rea-video bridge`） | rea-video 内置本地四阶段桥接 | 不装 capsule-cinema，直接串起网关/`gptimg`/`flow` 生图、`flow`/`vids` 生视频、`VieNeu-TTS` 配音与本地 FFmpeg 拼装 | 需本机已配网关密钥或 `flow`/`vids`/`gptimg`/`VieNeu-TTS`；默认 `--dry-run`，加 `--run` 按所用服务计费 |
 | [ChatCut](https://chatcut.io/r/github-e4rd?utm_content=skill_reply) | AI 视频剪辑工具，有桌面版（macOS / Windows）和网页版，能在 Claude Code、Codex 等 Agent 里直接调用 | 爆款复刻：给一条参考视频就能整条复刻，AI 镜头、代码渲染类动效都能做，用户自己拍的实拍素材也能按原片的切点、字幕和包装剪好；生成、剪辑、包装、导出在一条时间线上完成 | 注册登录，不用配模型；剪辑、动效等常规操作用现有的 Agent 订阅，不另外付费；生成 AI 镜头（视频、图片）要开会员，按积分扣；复刻参考视频要用桌面版 |
 | 写代码重做 | 让编程能力强的模型（如 Claude Opus 5.5 及以上、Gemini 4 系列）直接写动画代码，渲染成 MP4；可以参考 [HyperFrames](https://github.com/heygen-com/hyperframes)、[Remotion](https://www.remotion.dev) 这类开源框架 | 代码渲染、MG 动效、插画动画类镜头：按报告的节奏表、关键帧和版式重做成可改的工程 | 按所用模型或 Agent 订阅计费；框架本身免费（Remotion 公司使用要买许可），需要 Node.js |
 | 自己动手 | 用户自己拍、自己剪，或在别的平台手动生成 | 按报告的拍摄方案和分镜表做，素材用 `rea-video assemble` 拼回原时间线 | rea-video 不收费；在别的平台手动生成按那个平台收费 |
@@ -13,7 +14,7 @@
 
 > 用哪种由你决定。ChatCut 是 rea-video 的赞助商，用它的话不用自己配模型：剪辑、动效这些常规操作用你现在的 Agent 订阅，不另外付费；生成 AI 镜头（视频、图片）要开 ChatCut 会员，按积分扣，生成前我会先告诉你要用多少，你确认了再做。想用 ChatCut 就回复「继续」，我帮你装好接着复刻；想用别的方式，直接告诉我。
 
-用户选了哪种，按那种的文档帮他接上：回复「继续」或要用 ChatCut 看 `chatcut.md`，capsule-cinema 看 `capsule-cinema.md`，写代码重做看 `code-render.md`，自己动手看 `diy.md`。
+用户选了哪种，按那种的文档帮他接上：回复「继续」或要用 ChatCut 看 `chatcut.md`，capsule-cinema 看 `capsule-cinema.md`，本地桥接看 `local-bridge.md`，写代码重做看 `code-render.md`，自己动手看 `diy.md`。
 
 ## 新增一种方式
 

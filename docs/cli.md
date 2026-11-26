@@ -94,6 +94,17 @@ rea-video capsule-draft out/ref/breakdown.json --capsule-root $CC --capsule-name
 
 见 [capsule-cinema.md](capsule-cinema.md)。
 
+## 本地桥接复刻（不依赖 capsule-cinema）
+
+```bash
+rea-video plan out/ref --model gemini-omni-flash
+rea-video bridge out/ref --dry-run                                               # 默认只预览四阶段任务，不触发外部调用
+rea-video bridge out/ref --stage images --image-backend gateway --run            # 重绘首尾帧（支持 gpt-image-2.6-* 与 gemini-*-image*，或 --image-backend gptimg/flow）
+rea-video bridge out/ref --stage video --video-backend flow --run                # 生成视频单元（avatar 镜头自动路由 vids，也可传 --video-backend vids）
+rea-video bridge out/ref --stage audio --clone-source-voices --run               # 调用本地 VieNeu-TTS 合成配音混音（dubbed_mix.wav）
+rea-video bridge out/ref --stage assemble --run                                  # 拼回 remake.mp4 / compare.mp4；等价于 assemble <breakdown.json> <results.json> --audio <dubbed_mix.wav>
+```
+
 ## 命令
 
 | 命令 | 作用 |
@@ -121,7 +132,8 @@ rea-video capsule-draft out/ref/breakdown.json --capsule-root $CC --capsule-name
 | `models [ID]` | 列出能力地图里的生成模型；带 id 时打印这个模型的提示词写法和关键帧要求（`models keyframes` 是关键帧通用做法）；`~/.rea-video/capabilities/models/*.yaml` 里补充的模型也会列出 |
 | `plan OUT_DIR [--model ID] [--generate ai\|all]` | 按复刻意图 `remake/intent.yaml`（模型、整条重做还是只做 AI 镜头、换什么）出报告第二部分：生成单元、每次喂什么、提示词草稿和方案检查；`remake/prompts.json` 里按模型写好的最终提示词会做格式检查；拆解结果不变 |
 | `remake-plan` | 把方案里的生成单元写成任务和交接文件 |
-| `remake` / `assemble` | 转交 capsule-cinema 拼回成片并验收 |
+| `remake` / `assemble [--audio WAV]` | 本地或转交 capsule-cinema 拼回成片并验收（`--audio` 可替换为配音混音轨） |
+| `bridge OUT_DIR [--stage images\|video\|audio\|assemble\|all] [--run]` | 本地四阶段复刻桥接（默认 `--dry-run` 预览，加 `--run` 执行网关/`gptimg`/`flow` 生图、`flow`/`vids` 生视频、`VieNeu-TTS` 配音与本地拼装） |
 | `remake-run JOBS [--dry-run] [--only G2\|2,5\|shot_002] [--capsule-root]` | 转交 capsule-cinema 执行复刻任务（会计费）；有任务没生成出视频时退出码非 0 |
 | `capsule-draft breakdown.json` | 生成 capsule-cinema 胶囊草稿 |
 
