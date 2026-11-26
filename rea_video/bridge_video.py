@@ -10,37 +10,24 @@ from .bridge import (
     _resolve_cli,
     _run_cli_json,
     _video_backend_for_unit,
-    aspect_to_gateway_size,
+    normalize_aspect,
     parse_only,
 )
-from .generation import load_prompts, redrawn_frame, unit_images, wants_last_frame
+from .generation import (
+    load_intent,
+    load_prompts,
+    redrawn_frame,
+    resolve_redrawn_frame,
+    unit_frame_aliases,
+    unit_images,
+    wants_last_frame,
+)
 from .integrations import capsule_cinema
 from .util import read_json, write_json
 
 _FLOW_MAX_REFS = 10
 _VIDS_EDIT_MAX_REFS = 7
 _VIDS_CREATE_MAX_INGREDIENTS = 3
-
-
-def _flow_aspect(aspect: str | None) -> str:
-    raw = str(aspect or "").strip()
-    if raw in ("16:9", "9:16"):
-        return raw
-    if aspect_to_gateway_size(raw) == "1024x1536":
-        return "9:16"
-    return "16:9"
-
-
-def _vids_aspect(aspect: str | None) -> str:
-    raw = str(aspect or "").strip()
-    if raw in ("16:9", "9:16", "1:1"):
-        return raw
-    size = aspect_to_gateway_size(raw)
-    if size == "1024x1536":
-        return "9:16"
-    if size == "1536x1024":
-        return "16:9"
-    return "1:1"
 
 
 def _resolve_local(out_dir: Path, raw: str | Path | None) -> str | None:
@@ -78,10 +65,10 @@ def _mine_key_and_entry(
     bookend: bool,
 ) -> tuple[str, dict[str, Any]]:
     shots = task["shots"]
-    jid = task["id"]
+    task_id = task["id"]
     parts = int(task["parts"])
     base: dict[str, Any] = {
-        "id": jid,
+        "id": task_id,
         "video": str(out_path.resolve()),
         "shots": shots,
         "trim_to": round(float(trim_to), 3),
@@ -91,7 +78,7 @@ def _mine_key_and_entry(
     }
     if len(shots) == 1 and parts == 1:
         return str(shots[0]), base
-    return jid, {
+    return task_id, {
         **base,
         "unit": task["unit_id"],
         "part": int(task["part"]),
@@ -131,9 +118,9 @@ def collect_video_tasks(
         backend = _video_backend_for_unit(unit, shots_by_idx, cfg)
         is_avatar = any((shots_by_idx.get(s) or {}).get("base", {}).get("label") == "avatar" for s in u_shots)
         for part in parts:
-            jid = unit["id"] if len(parts) == 1 else f"{unit['id']}-{part}"
+            task_id = unit["id"] if len(parts) == 1 else f"{unit['id']}-{part}"
             tasks.append({
-                "id": jid,
+                "id": task_id,
                 "unit": unit,
                 "unit_id": unit["id"],
                 "part": part,
@@ -142,7 +129,7 @@ def collect_video_tasks(
                 "strategy": unit.get("strategy") or "text",
                 "backend": backend,
                 "is_avatar": is_avatar,
-                "output": video_dir / f"{jid}.mp4",
+                "output": video_dir / f"{task_id}.mp4",
             })
 
     for raw_s in plan.get("avatar") or []:
@@ -151,9 +138,9 @@ def collect_video_tasks(
             continue
         if only_shots is not None and shot_idx not in only_shots:
             continue
-        jid = f"avatar_shot{shot_idx:03d}"
+        task_id = f"avatar_shot{shot_idx:03d}"
         tasks.append({
-            "id": jid,
+            "id": task_id,
             "unit": None,
             "unit_id": None,
             "part": 1,
@@ -163,7 +150,7 @@ def collect_video_tasks(
             "backend": "vids",
             "is_avatar": True,
             "shot_record": shots_by_idx.get(shot_idx) or {},
-            "output": video_dir / f"{jid}.mp4",
+            "output": video_dir / f"{task_id}.mp4",
         })
 
     return tasks
@@ -182,7 +169,7 @@ def _build_flow_cmd(
     refs: list[str],
     first_frame: str | None,
     last_frame: str | None,
-    jid: str,
+    task_id: str,
 ) -> tuple[list[str], bool]:
     bookend = False
     has_last = strategy == "frames" and bool(last_frame)
@@ -210,7 +197,7 @@ def _build_flow_cmd(
 
     if strategy in ("edit", "remix"):
         if not ref_clip:
-            raise BridgeError(f"{jid}: {strategy} strategy requires a reference video clip")
+            raise BridgeError(f"{task_id}: {strategy} strategy requires a reference video clip")
         cmd.extend(["--ref-video", ref_clip])
         for rp in refs[:_FLOW_MAX_REFS]:
             cmd.extend(["--ref", rp])
@@ -219,7 +206,7 @@ def _build_flow_cmd(
             cmd.extend(["--ref", rp])
     elif strategy == "frames":
         if not first_frame:
-            raise BridgeError(f"{jid}: frames strategy requires a first frame")
+            raise BridgeError(f"{task_id}: frames strategy requires a first frame")
         cmd.extend(["--first-frame", first_frame])
         if last_frame:
             cmd.extend(["--last-frame", last_frame])
@@ -227,7 +214,7 @@ def _build_flow_cmd(
     elif strategy == "text":
         pass
     else:
-        raise BridgeError(f"{jid}: unsupported video strategy {strategy!r}")
+        raise BridgeError(f"{task_id}: unsupported video strategy {strategy!r}")
 
     return cmd, bookend
 
@@ -249,7 +236,7 @@ def _build_vids_cmd(
     ref_clip: str | None,
     refs: list[str],
     first_frame: str | None,
-    jid: str,
+    task_id: str,
 ) -> tuple[list[str], bool]:
     duration = _clamp_duration(dur_s, 3, 15)
     resolution = _vids_resolution(cfg.resolution)
@@ -286,7 +273,7 @@ def _build_vids_cmd(
 
     if strategy in ("edit", "remix"):
         if not ref_clip:
-            raise BridgeError(f"{jid}: vids {strategy} requires a reference video clip")
+            raise BridgeError(f"{task_id}: vids {strategy} requires a reference video clip")
         cmd = [cli_path, "edit", "--input", ref_clip, "--prompt", prompt]
         for rp in refs[:_VIDS_EDIT_MAX_REFS]:
             cmd.extend(["--ref", rp])
@@ -297,7 +284,7 @@ def _build_vids_cmd(
 
     if strategy == "frames":
         if not first_frame:
-            raise BridgeError(f"{jid}: vids frames requires a first frame")
+            raise BridgeError(f"{task_id}: vids frames requires a first frame")
         return [cli_path, "animate", "--input", first_frame, "--prompt", prompt, *tail], False
 
     if strategy in ("keyframes", "text"):
@@ -310,7 +297,7 @@ def _build_vids_cmd(
         cmd.extend(tail)
         return cmd, False
 
-    raise BridgeError(f"{jid}: unsupported vids strategy {strategy!r}")
+    raise BridgeError(f"{task_id}: unsupported vids strategy {strategy!r}")
 
 
 def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dict[str, Any]:
@@ -321,8 +308,8 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
     prompts = load_prompts(out_dir)
 
     src_aspect = (b.get("source") or {}).get("aspect_ratio")
-    flow_aspect = _flow_aspect(src_aspect)
-    vids_aspect = _vids_aspect(src_aspect)
+    flow_aspect = normalize_aspect(src_aspect, ("16:9", "9:16"), default="16:9")
+    vids_aspect = normalize_aspect(src_aspect, ("16:9", "9:16", "1:1"), default="1:1")
 
     mine_path = out_dir / "remake" / "mine.json"
     mine_data: dict[str, Any] = read_json(mine_path) if mine_path.is_file() else {}
@@ -334,7 +321,7 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
     skipped: list[str] = []
 
     for task in tasks:
-        jid = task["id"]
+        task_id = task["id"]
         out_path: Path = task["output"]
         unit = task["unit"]
         strategy = task["strategy"]
@@ -344,7 +331,17 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
         trim_to = float((unit.get("generate_s") or unit.get("duration") or dur_s) if unit else dur_s)
 
         if out_path.is_file() and not cfg.force:
-            bookend = strategy == "frames" and unit is not None and wants_last_frame(unit)
+            bookend = False
+            if strategy == "frames" and unit is not None and wants_last_frame(unit):
+                intent = (b.get("production_plan") or {}).get("intent") or b.get("intent") or load_intent(out_dir)
+                first_rd = resolve_redrawn_frame(out_dir, unit_frame_aliases(unit, part, "first"))
+                last_rd = resolve_redrawn_frame(out_dir, unit_frame_aliases(unit, part, "last"))
+                subject_redesigned = (
+                    first_rd is not None
+                    or bool(intent.get("swaps"))
+                    or str(intent.get("image_ref") or "auto") not in ("", "auto")
+                )
+                bookend = not (subject_redesigned and last_rd is None)
             m_key, m_entry = _mine_key_and_entry(task, out_path, trim_to, bookend)
             if m_key not in results:
                 results[m_key] = m_entry
@@ -369,7 +366,7 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
             sh = task.get("shot_record") or {}
             shot_idx = shots[0]
             prompt = (
-                prompts.get(jid)
+                prompts.get(task_id)
                 or prompts.get(f"shot_{shot_idx:03d}")
                 or (sh.get("vlm") or {}).get("description")
                 or sh.get("description")
@@ -424,7 +421,7 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
                 refs=refs,
                 first_frame=first_frame,
                 last_frame=last_frame,
-                jid=jid,
+                task_id=task_id,
             )
         elif backend == "vids":
             cli_path = cli_paths.get("vids") or cli_paths.setdefault("vids", _resolve_cli("vids"))
@@ -440,12 +437,12 @@ def run_video_stage(cfg: BridgeConfig, b: dict, plan: dict | None = None) -> dic
                 ref_clip=ref_clip,
                 refs=refs,
                 first_frame=first_frame,
-                jid=jid,
+                task_id=task_id,
             )
         else:
-            raise BridgeError(f"{jid}: unsupported video backend {backend!r}")
+            raise BridgeError(f"{task_id}: unsupported video backend {backend!r}")
 
-        _run_cli_json(cmd, shot_id=jid)
+        _run_cli_json(cmd, shot_id=task_id)
         m_key, m_entry = _mine_key_and_entry(task, out_path, trim_to, bookend)
         results[m_key] = m_entry
         _save_mine(mine_path, mine_data, results)

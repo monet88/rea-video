@@ -149,16 +149,39 @@ def aspect_to_gateway_size(aspect: str | None) -> str:
     return "1024x1024"
 
 
-def _normalize_cli_aspect(aspect: str | None) -> str:
+def normalize_aspect(
+    aspect: str | None,
+    allowed: tuple[str, ...] = ("16:9", "9:16", "1:1", "4:3", "3:4"),
+    default: str = "9:16",
+) -> str:
+    """Normalize source aspect ratio string to one of `allowed` ratios."""
     raw = str(aspect or "").strip()
-    if raw in ("16:9", "9:16", "1:1", "4:3", "3:4"):
+    if raw in allowed:
         return raw
     size = aspect_to_gateway_size(raw)
-    if size == "1024x1536":
+    if size == "1024x1536" and "9:16" in allowed:
         return "9:16"
-    if size == "1536x1024":
+    if size == "1536x1024" and "16:9" in allowed:
         return "16:9"
-    return "1:1"
+    if size == "1024x1024" and "1:1" in allowed:
+        return "1:1"
+    return default
+
+
+def urlopen_bytes(req: urllib.request.Request | str, *, timeout: float, label: str) -> bytes:
+    """Execute an HTTP request and return raw response bytes, raising BridgeError on failure."""
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        err_body = ""
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")[:400]
+        except OSError:
+            pass
+        raise BridgeError(f"{label} (HTTP {exc.code}): {err_body or exc.reason}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise BridgeError(f"{label}: {exc}") from None
 
 
 def resolve_gateway_config(image_model: str | None = None) -> tuple[str, str, str]:
@@ -247,18 +270,7 @@ def _gateway_image_request(
             "Content-Type": content_type,
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120.0) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as exc:
-        err_body = ""
-        try:
-            err_body = exc.read().decode("utf-8", errors="replace")[:400]
-        except OSError:
-            pass
-        raise BridgeError(f"{shot_id}: gateway HTTP {exc.code}: {err_body or exc.reason}") from None
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise BridgeError(f"{shot_id}: gateway request failed: {exc}") from None
+    raw = urlopen_bytes(req, timeout=120.0, label=f"{shot_id}: gateway request failed")
 
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -276,11 +288,7 @@ def _gateway_image_request(
     if first.get("b64_json"):
         return base64.b64decode(first["b64_json"])
     if first.get("url"):
-        try:
-            with urllib.request.urlopen(first["url"], timeout=120.0) as img_resp:
-                return img_resp.read()
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise BridgeError(f"{shot_id}: failed to download image URL: {exc}") from None
+        return urlopen_bytes(first["url"], timeout=120.0, label=f"{shot_id}: failed to download image URL")
     raise BridgeError(f"{shot_id}: gateway response missing b64_json or url")
 
 
@@ -290,7 +298,7 @@ def run_images_stage(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
     only_shots = parse_only(cfg.only)
     aspect = (b.get("source") or {}).get("aspect_ratio")
     size = aspect_to_gateway_size(aspect)
-    cli_aspect = _normalize_cli_aspect(aspect)
+    cli_aspect = normalize_aspect(aspect, ("16:9", "9:16", "1:1", "4:3", "3:4"), default="1:1")
 
     gw_cfg: tuple[str, str, str] | None = None
     cli_path: str | None = None
@@ -369,9 +377,10 @@ def _video_backend_for_unit(unit: dict, shots_by_idx: dict[int, dict], cfg: Brid
 
 def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
     """Preview planned images, video, audio, and assemble work without calling any external API, CLI, or FFmpeg."""
+    from .bridge_video import collect_video_tasks
+
     out_dir = Path(cfg.out_dir)
     only_shots = parse_only(cfg.only)
-    shots_by_idx = {int(r["index"]): r for r in b.get("shots") or []}
     selected = list(STAGES) if cfg.stage == "all" else [cfg.stage]
 
     img_tasks_preview: list[dict[str, Any]] = []
@@ -391,20 +400,37 @@ def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
             "would_skip": bool(exists and not cfg.force),
         })
 
-    units_preview: list[dict[str, Any]] = []
-    for u in plan.get("units") or []:
-        u_shots = [int(s) for s in (u.get("shots") or [])]
-        if only_shots is not None and not any(s in only_shots for s in u_shots):
-            continue
-        units_preview.append({
-            "id": u["id"],
-            "shots": u_shots,
-            "strategy": u.get("strategy"),
-            "backend": _video_backend_for_unit(u, shots_by_idx, cfg),
+    units_preview: list[dict[str, Any]] = [
+        {
+            "id": t["id"],
+            "shots": t["shots"],
+            "strategy": t["strategy"],
+            "backend": t["backend"],
             "resolution": cfg.resolution,
-        })
+            "output": str(t["output"]),
+            "would_skip": bool(Path(t["output"]).is_file() and not cfg.force),
+        }
+        for t in collect_video_tasks(b, out_dir, cfg, plan=plan)
+    ]
 
-    lines = entities.script(b)
+    if cfg.dubbing_script:
+        sp = Path(cfg.dubbing_script)
+        script_path = sp if sp.is_absolute() else out_dir / sp
+    else:
+        script_path = out_dir / "remake" / "dubbing_script.json"
+    lines = (read_json(script_path).get("lines") or []) if script_path.is_file() else entities.script(b)
+    audio_dir = out_dir / "remake" / "bridge" / "audio"
+    active_lines = 0
+    skip_lines = 0
+    for i, ln in enumerate(lines, 1):
+        if not str(ln.get("text") or "").strip():
+            continue
+        active_lines += 1
+        idx = int(ln.get("index") or i)
+        if (audio_dir / f"line_{idx:03d}.wav").is_file() and not cfg.force:
+            skip_lines += 1
+    mix_exists = (audio_dir / "dubbed_mix.wav").is_file()
+    mix_would_skip = bool(mix_exists and not cfg.force)
     tts_url = cfg.tts_url or os.getenv("REA_TTS_BASE_URL") or "http://127.0.0.1:8000"
 
     return {
@@ -417,6 +443,9 @@ def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
         "audio": {
             "tts_url": tts_url,
             "lines": len(lines),
+            "would_skip_lines": skip_lines,
+            "mix_would_skip": mix_would_skip,
+            "would_skip": bool(active_lines > 0 and skip_lines == active_lines and mix_would_skip),
             "voice": cfg.tts_voice,
             "clone_source_voices": cfg.clone_source_voices,
             "keep_original_audio": cfg.keep_original_audio,

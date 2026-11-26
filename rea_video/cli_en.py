@@ -184,7 +184,7 @@ HELP = {
     "bridge.tts_ref": "reference audio clip path (3-8s) for VieNeu-TTS voice cloning",
     "bridge.clone_source_voices": "automatically slice 5s reference samples from separated speaker stems",
     "bridge.tts_url": "VieNeu-TTS server base URL (defaults to $REA_TTS_BASE_URL or http://127.0.0.1:8000)",
-    "bridge.dubbing_script": "dubbing script JSON path (defaults to <out_dir>/remake/bridge/audio/dubbing_script.json)",
+    "bridge.dubbing_script": "dubbing script JSON path (defaults to <out_dir>/remake/dubbing_script.json)",
     "bridge.keep_original_audio": "keep original source audio during assembly instead of dubbed mix",
     "bridge.no_overlays": "do not re-apply captions or styled text overlays on replaced shots",
     "bridge.retime": "timing alignment mode: smooth (default) / warp",

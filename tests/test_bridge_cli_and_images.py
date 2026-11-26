@@ -312,3 +312,89 @@ def test_bridge_delegates_video_audio_assemble_stages_lazily(tmp_path):
         run_bridge(BridgeConfig(out_dir=pkg, stage="assemble", run=True))
 
     assert called == ["video", "audio", "assemble"]
+
+
+def test_plan_cli_completes_after_cmd_bridge_separation(tmp_path, capsys):
+    pkg = tmp_path / "plan_pkg"
+    pkg.mkdir(parents=True, exist_ok=True)
+    breakdown = {
+        "source": {
+            "path": "source.mp4",
+            "filename": "source.mp4",
+            "aspect_ratio": "9:16",
+            "duration": 4.0,
+            "width": 720,
+            "height": 1280,
+            "fps": 30.0,
+            "has_audio": False,
+        },
+        "analysis": {"vlm": {"used": False}},
+        "shots": [],
+    }
+    write_json(pkg / "breakdown.json", breakdown)
+
+    rc = cli.main(["plan", str(pkg), "--model", "minimax-h3"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "minimax-h3" in out
+
+
+def test_bridge_dry_run_preview_parity_video_and_audio(tmp_path, capsys):
+    pkg = _make_package(tmp_path)
+    bpath = pkg / "breakdown.json"
+    b = json.loads(bpath.read_text(encoding="utf-8"))
+    b["shots"].append(
+        {"index": 3, "start": 8.0, "end": 12.0, "duration": 4.0, "base": {"label": "avatar"}}
+    )
+    b["production_plan"]["units"] = [
+        {
+            "id": "G1",
+            "shots": [1],
+            "strategy": "edit",
+            "duration": 10.0,
+            "calls": 2,
+            "refs": [{"tag": "@视频1", "part": 1, "ranges": [[0.0, 4.0]]}, {"tag": "@视频1", "part": 2, "ranges": [[4.0, 8.0]]}],
+        }
+    ]
+    b["production_plan"]["avatar"] = [3]
+    write_json(bpath, b)
+
+    # Pre-create G1-1.mp4, custom dubbing_script.json with 2 lines, line_001.wav, and dubbed_mix.wav
+    vdir = pkg / "remake" / "bridge" / "video"
+    vdir.mkdir(parents=True, exist_ok=True)
+    (vdir / "G1-1.mp4").write_bytes(b"g1-1")
+
+    adir = pkg / "remake" / "bridge" / "audio"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "line_001.wav").write_bytes(b"wav1")
+    (adir / "dubbed_mix.wav").write_bytes(b"mix")
+    write_json(
+        pkg / "remake" / "dubbing_script.json",
+        {
+            "version": 1,
+            "speakers": {"S1": {"label": "Host", "voice": "Binh", "ref": ""}},
+            "lines": [
+                {"index": 1, "start": 0.0, "end": 1.5, "speaker": "S1", "text": "Edited line 1"},
+                {"index": 2, "start": 2.0, "end": 3.5, "speaker": "S1", "text": "Edited line 2"},
+            ],
+        },
+    )
+
+    with patch("subprocess.run") as mock_sub, patch("urllib.request.urlopen") as mock_url:
+        rc = cli.main(["bridge", str(pkg)])
+    assert rc == 0
+    mock_sub.assert_not_called()
+    mock_url.assert_not_called()
+
+    out = json.loads(capsys.readouterr().out)
+    v_units = out["video"]["units"]
+    assert [u["id"] for u in v_units] == ["G1-1", "G1-2", "avatar_shot003"]
+    assert v_units[0]["would_skip"] is True
+    assert v_units[1]["would_skip"] is False
+    assert v_units[2]["would_skip"] is False
+    assert v_units[2]["backend"] == "vids"
+
+    assert out["audio"]["lines"] == 2
+    assert out["audio"]["would_skip_lines"] == 1
+    assert out["audio"]["mix_would_skip"] is True
+    assert out["audio"]["would_skip"] is False

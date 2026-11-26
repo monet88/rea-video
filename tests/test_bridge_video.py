@@ -397,4 +397,45 @@ def test_run_video_stage_mine_json_skip_existing_force_and_incremental_error(tmp
     assert len(res["generated"]) == 3
 
 
+def test_run_video_stage_skipped_frames_bookend_respects_redrawn_subject(tmp_path):
+    pkg = _make_video_package(
+        tmp_path,
+        units=[
+            {
+                "id": "G1",
+                "shots": [1],
+                "strategy": "frames",
+                "duration": 4.0,
+                "generate_s": 4.0,
+                "calls": 1,
+                "inputs": [{"kind": "last_frame", "need": "yes"}],
+            },
+        ],
+        shots=[
+            {"index": 1, "start": 0.0, "end": 4.0, "duration": 4.0, "base": {"label": "ai_video"}},
+        ],
+    )
+    # Pre-create G1.mp4 and redrawn first frame, but NO redrawn last frame
+    existing = pkg / "remake" / "bridge" / "video" / "G1.mp4"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_bytes(b"existing")
+    rd_dir = pkg / "remake" / "redrawn"
+    rd_dir.mkdir(parents=True, exist_ok=True)
+    (rd_dir / "shot001.png").write_bytes(b"redrawn-first")
+
+    b = read_json(pkg / "breakdown.json")
+    cfg = BridgeConfig(out_dir=pkg, stage="video", run=True)
+    res = run_video_stage(cfg, b, b["production_plan"])
+    assert res["skipped"] == [str(existing)]
+    mine = read_json(pkg / "remake" / "mine.json")["results"]
+    assert mine["1"]["bookend"] is False
+
+    # Now add redrawn last frame and clear mine.json -> bookend becomes True
+    (pkg / "remake" / "mine.json").unlink()
+    (rd_dir / "shot001_last.png").write_bytes(b"redrawn-last")
+    run_video_stage(cfg, b, b["production_plan"])
+    mine2 = read_json(pkg / "remake" / "mine.json")["results"]
+    assert mine2["1"]["bookend"] is True
+
+
 

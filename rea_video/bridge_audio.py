@@ -7,14 +7,13 @@ import os
 import re
 import shutil
 import subprocess
-import urllib.error
 import urllib.request
 import wave
 from pathlib import Path
 from typing import Any
 
 from . import entities
-from .bridge import BridgeConfig, BridgeError, _encode_multipart
+from .bridge import BridgeConfig, BridgeError, _encode_multipart, urlopen_bytes
 from .util import clamp, read_json, write_json
 
 DEFAULT_TTS_URL = "http://127.0.0.1:8000"
@@ -68,18 +67,7 @@ def enroll_voice(
     if key:
         headers["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(f"{base_v1}/voices", data=body, method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=60.0) as resp:
-            resp.read()
-    except urllib.error.HTTPError as exc:
-        err_body = ""
-        try:
-            err_body = exc.read().decode("utf-8", errors="replace")[:400]
-        except OSError:
-            pass
-        raise BridgeError(f"TTS voice enrollment failed (HTTP {exc.code}): {err_body or exc.reason}") from None
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise BridgeError(f"TTS voice enrollment failed: {exc}") from None
+    urlopen_bytes(req, timeout=60.0, label="TTS voice enrollment failed")
     return voice_name
 
 
@@ -111,18 +99,7 @@ def synthesize_line(
         method="POST",
         headers=headers,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120.0) as resp:
-            wav_bytes = resp.read()
-    except urllib.error.HTTPError as exc:
-        err_body = ""
-        try:
-            err_body = exc.read().decode("utf-8", errors="replace")[:400]
-        except OSError:
-            pass
-        raise BridgeError(f"TTS synthesis failed (HTTP {exc.code}): {err_body or exc.reason}") from None
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise BridgeError(f"TTS synthesis failed: {exc}") from None
+    wav_bytes = urlopen_bytes(req, timeout=120.0, label="TTS synthesis failed")
     out.write_bytes(wav_bytes)
     return out
 

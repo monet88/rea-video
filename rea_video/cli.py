@@ -860,6 +860,22 @@ def cmd_plan(args) -> int:
         plan = b.get("production_plan") or {}
         print(T("已按 {m} 的写法自动重写 {n} 段提示词 → {f}", "Rewrote {n} unit prompt(s) for {m} → {f}",
                 m=m["id"], n=len(rewritten), f=out / "remake" / "prompts.json"))
+    from .integrations.capsule_cinema import image_ref_frames
+
+    n = sum(len(ref_clips(b, out, u)) for u in plan.get("units") or []) + len(image_ref_frames(b, out, plan))
+    v = m.get("verified") or {}
+    print(T("复刻方案已按 {m} 重出（报告第二部分）：{p}", "Remake plan redone for {m} (part two of the report): {p}",
+            m=m["id"], p=b["summary"].get("production", "")))
+    if n:
+        print(T("原片参考 {n} 个（已擦掉字幕）：{d}", "{n} source references (subtitles erased): {d}", n=n, d=out / "remake" / "refs"))
+    print(T("模型资料：{src}，核实于 {d}", "Model facts: {src}, checked {d}", src=T("本地补充", "local addition") if m.get("local") else T("能力地图", "capability map"), d=v.get("date") or "?"))
+    from .generation import check_lines
+
+    cs = plan.get("checks") or []
+    if cs:
+        print(T("方案检查：", "Plan checks:"))
+        print("\n".join(check_lines(cs)))
+    return 1 if any(c["level"] == "error" for c in cs) else 0
 
 
 def cmd_bridge(args) -> int:
@@ -895,22 +911,6 @@ def cmd_bridge(args) -> int:
         return 2
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0
-    from .integrations.capsule_cinema import image_ref_frames
-
-    n = sum(len(ref_clips(b, out, u)) for u in plan.get("units") or []) + len(image_ref_frames(b, out, plan))
-    v = m.get("verified") or {}
-    print(T("复刻方案已按 {m} 重出（报告第二部分）：{p}", "Remake plan redone for {m} (part two of the report): {p}",
-            m=m["id"], p=b["summary"].get("production", "")))
-    if n:
-        print(T("原片参考 {n} 个（已擦掉字幕）：{d}", "{n} source references (subtitles erased): {d}", n=n, d=out / "remake" / "refs"))
-    print(T("模型资料：{src}，核实于 {d}", "Model facts: {src}, checked {d}", src=T("本地补充", "local addition") if m.get("local") else T("能力地图", "capability map"), d=v.get("date") or "?"))
-    from .generation import check_lines
-
-    cs = plan.get("checks") or []
-    if cs:
-        print(T("方案检查：", "Plan checks:"))
-        print("\n".join(check_lines(cs)))
-    return 1 if any(c["level"] == "error" for c in cs) else 0
 
 
 def cmd_models(args) -> int:
@@ -1250,7 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
     br.add_argument("--tts-ref", help="VieNeu-TTS 音色克隆参考音频路径（3-8 秒）")
     br.add_argument("--clone-source-voices", action="store_true", help="从分离的说话人声轨自动截取 5 秒样本克隆原片音色")
     br.add_argument("--tts-url", help="VieNeu-TTS 服务地址（默认 $REA_TTS_BASE_URL 或 http://127.0.0.1:8000）")
-    br.add_argument("--dubbing-script", help="配音脚本 JSON 路径（默认 <out_dir>/remake/bridge/audio/dubbing_script.json）")
+    br.add_argument("--dubbing-script", help="配音脚本 JSON 路径（默认 <out_dir>/remake/dubbing_script.json）")
     br.add_argument("--keep-original-audio", action="store_true", help="合成阶段保留原片音轨，不使用配音混音")
     br.add_argument("--no-overlays", action="store_true", help="合成阶段不在替换镜头上叠回字幕 / 花字")
     br.add_argument("--retime", choices=["smooth", "warp"], default="smooth", help="时间对齐方式（默认 smooth）")
