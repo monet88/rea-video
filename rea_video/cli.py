@@ -860,6 +860,41 @@ def cmd_plan(args) -> int:
         plan = b.get("production_plan") or {}
         print(T("已按 {m} 的写法自动重写 {n} 段提示词 → {f}", "Rewrote {n} unit prompt(s) for {m} → {f}",
                 m=m["id"], n=len(rewritten), f=out / "remake" / "prompts.json"))
+
+
+def cmd_bridge(args) -> int:
+    """Run or dry-run the native local remake bridge (images / video / audio / assemble)."""
+    from .bridge import BridgeConfig, BridgeError, run_bridge
+
+    cfg = BridgeConfig(
+        out_dir=Path(args.out_dir),
+        stage=args.stage,
+        run=bool(args.run and not args.dry_run),
+        only=args.only,
+        force=bool(args.force),
+        image_backend=args.image_backend,
+        image_model=args.image_model,
+        video_backend=args.video_backend,
+        resolution=args.resolution,
+        avatar=args.avatar,
+        pool_strategy=args.pool_strategy,
+        profile=args.profile,
+        tts_voice=args.tts_voice,
+        tts_ref=args.tts_ref,
+        clone_source_voices=bool(args.clone_source_voices),
+        tts_url=args.tts_url,
+        dubbing_script=args.dubbing_script,
+        keep_original_audio=bool(args.keep_original_audio),
+        no_overlays=bool(args.no_overlays),
+        retime=args.retime,
+    )
+    try:
+        res = run_bridge(cfg)
+    except BridgeError as exc:
+        print(f"rea-video: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
     from .integrations.capsule_cinema import image_ref_frames
 
     n = sum(len(ref_clips(b, out, u)) for u in plan.get("units") or []) + len(image_ref_frames(b, out, plan))
@@ -1196,6 +1231,30 @@ def main(argv: list[str] | None = None) -> int:
     pl_.add_argument("--generate", choices=["ai", "all"], help="ai：只生成原片里 AI 做的镜头，实拍的出拍摄方案；all：整条都用模型生成（换人、换物后整条复刻）")
     pl_.add_argument("--rewrite-prompts", action="store_true", help="用已配置的大模型（GEMINI_API_KEY 或 REA_VLM_*）按所选模型的提示词指南自动重写每段提示词，校验后写入 remake/prompts.json")
     pl_.set_defaults(func=cmd_plan)
+
+    br = sub.add_parser("bridge", help="本地复刻桥接：默认 --dry-run 预览，加 --run 执行图片 / 视频 / 配音 / 合成阶段")
+    br.add_argument("out_dir", help="decompose 的输出目录")
+    br.add_argument("--stage", choices=["images", "video", "audio", "assemble", "all"], default="all", help="要执行的阶段（默认 all）")
+    br.add_argument("--run", action="store_true", help="真正执行外部请求和生成（默认仅 --dry-run 预览）")
+    br.add_argument("--dry-run", action="store_true", help="仅预览计划调用，不触发外部接口或 CLI（默认）")
+    br.add_argument("--only", help="只处理指定镜头（逗号分隔或区间，如 1,3-5,shot_007）")
+    br.add_argument("--force", action="store_true", help="覆盖已存在的重绘帧、生成视频或配音文件")
+    br.add_argument("--image-backend", choices=["gateway", "gptimg", "flow"], default="gateway", help="图片重绘后端（默认 gateway）")
+    br.add_argument("--image-model", help="gateway 图片模型（默认 $REA_IMAGE_MODEL 或 gpt-image-2.6-sunburst）")
+    br.add_argument("--video-backend", choices=["flow", "vids"], default="flow", help="视频生成后端（默认 flow；avatar 镜头自动走 vids）")
+    br.add_argument("--resolution", default="720p", help="视频分辨率（如 360p / 720p / 1080p，默认 720p）")
+    br.add_argument("--avatar", help="传给 vids 的数字人角色名")
+    br.add_argument("--pool-strategy", choices=["fill-first", "round-robin"], default="fill-first", help="flow/vids/gptimg 账号池调度策略（默认 fill-first）")
+    br.add_argument("--profile", help="指定 ShardBrowser 账号 profile 名称")
+    br.add_argument("--tts-voice", help="VieNeu-TTS 预设音色名")
+    br.add_argument("--tts-ref", help="VieNeu-TTS 音色克隆参考音频路径（3-8 秒）")
+    br.add_argument("--clone-source-voices", action="store_true", help="从分离的说话人声轨自动截取 5 秒样本克隆原片音色")
+    br.add_argument("--tts-url", help="VieNeu-TTS 服务地址（默认 $REA_TTS_BASE_URL 或 http://127.0.0.1:8000）")
+    br.add_argument("--dubbing-script", help="配音脚本 JSON 路径（默认 <out_dir>/remake/bridge/audio/dubbing_script.json）")
+    br.add_argument("--keep-original-audio", action="store_true", help="合成阶段保留原片音轨，不使用配音混音")
+    br.add_argument("--no-overlays", action="store_true", help="合成阶段不在替换镜头上叠回字幕 / 花字")
+    br.add_argument("--retime", choices=["smooth", "warp"], default="smooth", help="时间对齐方式（默认 smooth）")
+    br.set_defaults(func=cmd_bridge)
 
     mo = sub.add_parser("models", help="列出能力地图里的生成模型；带模型 id 时打印这个模型的提示词写法和关键帧要求")
     mo.add_argument("model", nargs="?", help="模型 id（如 seedance-2.5、kling-3.0）；keyframes 打印关键帧通用做法")
