@@ -35,6 +35,8 @@ HELP = {
     "decompose.no_survey": "with VLM, skip the overview and close-up pass (use only the cut detector's cuts)",
     "decompose.no_stems": "skip voice / music separation (by default writes stems/original.wav, vocals.wav, music.wav)",
     "decompose.no_moments": "skip special moments (magic reveals, twists, climaxes, mistakes); with VLM they are searched by default, about 3-5 extra calls",
+    "decompose.youtube_url": "YouTube URL for this video (or set $REA_YOUTUBE_URL); sent to Gemini / gateway with startOffset/endOffset instead of uploading local clips",
+    "decompose.yt_upload": "upload the video as unlisted via local yt-upload and pass the URL to Gemini / gateway",
 
     "stems": "only split the audio into original / vocals / music tracks",
     "stems.video": "input video or audio file",
@@ -128,6 +130,7 @@ HELP = {
     "survey.workers": "VLM concurrency",
 
     "moments": "find special moments (magic reveals, twists, climaxes, mistakes): read the lines and overview, zoom into each section for key frames, export clips and frames",
+    "moments.youtube_url": "YouTube URL (defaults to breakdown.json's youtube_url or $REA_YOUTUBE_URL)",
     "moments.out_dir": _OUT_DIR,
     "moments.vlm": "answer with the configured VLM (about 3-5 calls)",
     "moments.no_vlm": _NO_VLM_AGENT,

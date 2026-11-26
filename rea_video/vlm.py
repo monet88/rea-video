@@ -594,11 +594,13 @@ def prompt_lang_note() -> str:
     return ""
 
 
-def make_client(cache_dir: Path | None = None):
-    """The configured image / video reader: the REA_VLM_* endpoint when set, else Gemini's own API, else None."""
+def make_client(cache_dir: Path | None = None, *, prefer_gemini: bool = False):
+    """The configured image / video reader: the REA_VLM_* endpoint when set, else Gemini's own API / gateway, else None."""
     from . import gemini
 
+    if prefer_gemini and gemini.configured():
+        return gemini.GeminiClient(cache_dir=cache_dir)
     cfg = VLMConfig.from_env()
     if cfg is not None:
         return VLMClient(cfg, cache_dir)
-    return gemini.GeminiClient() if gemini.configured() else None
+    return gemini.GeminiClient(cache_dir=cache_dir) if gemini.configured() else None

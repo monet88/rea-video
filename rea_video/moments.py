@@ -772,7 +772,21 @@ def _task_clips(task: dict, clip_dir: Path) -> list[tuple[Path, str]]:
     return out
 
 
-def vlm_asker(client, lang_note: str = ""):
+def _task_youtube_clips(task: dict, youtube_url: str) -> list[tuple["YouTubeClip", str]]:
+    from .gemini import YouTubeClip
+
+    st = task.get("state") or {}
+    if task["id"] == "find":
+        return [(YouTubeClip(youtube_url), "整片 0 秒起")]
+    out = []
+    for mid, s in st.items():
+        if isinstance(s, dict) and s.get("times"):
+            a, z = max(0.0, s["times"][0] - CLIP_PAD), s["times"][-1] + CLIP_PAD
+            out.append((YouTubeClip(youtube_url, a, z), f"{mid} 从 {a:.2f} 秒起"))
+    return out
+
+
+def vlm_asker(client, lang_note: str = "", youtube_url: str | None = None):
     def ask(task: dict, images: list[Path]) -> dict:
         q = {k: task[k] for k in ("state", "questions")}
         prompt = (f"{task['instructions']}\n\n{lang_note}\n请求：\n{json.dumps(q, ensure_ascii=False)}\n\n"
@@ -781,7 +795,10 @@ def vlm_asker(client, lang_note: str = ""):
         clips = []
         if _wants_video(client) and images:
             try:
-                clips = _task_clips(task, Path(images[0]).parent / "clips")
+                if youtube_url and getattr(client, "youtube_ok", False):
+                    clips = _task_youtube_clips(task, youtube_url)
+                else:
+                    clips = _task_clips(task, Path(images[0]).parent / "clips")
             except Exception as exc:  # noqa: BLE001  the images alone still answer
                 LOG.warning("special moments: no clip for %s (%s)", task["id"], str(exc)[:80])
         if clips:

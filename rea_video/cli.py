@@ -67,14 +67,24 @@ def _check_vlm_config() -> None:
         raise SystemExit(f"rea-video: {exc}")
 
 
-def _vlm_client(out: Path):
+def _vlm_client(out: Path, *, prefer_gemini: bool = False):
     from .vlm import make_client
 
-    client = make_client(out / "vlm_cache")
+    client = make_client(out / "vlm_cache", prefer_gemini=prefer_gemini)
     if client is None:
-        raise SystemExit(U("rea-video: --vlm 需要 GEMINI_API_KEY，或 REA_VLM_BASE_URL / REA_VLM_API_KEY / REA_VLM_MODEL",
-                           "rea-video: --vlm needs GEMINI_API_KEY, or REA_VLM_BASE_URL / REA_VLM_API_KEY / REA_VLM_MODEL"))
+        raise SystemExit(U("rea-video: --vlm 需要 REA_GEMINI_API_KEY / GEMINI_API_KEY，或 REA_VLM_BASE_URL / REA_VLM_API_KEY / REA_VLM_MODEL",
+                           "rea-video: --vlm needs REA_GEMINI_API_KEY / GEMINI_API_KEY, or REA_VLM_BASE_URL / REA_VLM_API_KEY / REA_VLM_MODEL"))
     return client
+
+
+def _resolve_youtube_url(raw: str | None) -> str | None:
+    from . import gemini
+
+    try:
+        return gemini.resolve_youtube_url(raw)
+    except ValueError as exc:
+        bad = (raw or os.getenv("REA_YOUTUBE_URL", "")).strip()
+        raise SystemExit(U(f"rea-video: 无效的 YouTube 链接：{bad}", f"rea-video: {exc}")) from None
 
 
 def cmd_decompose(args) -> int:
@@ -93,6 +103,7 @@ def cmd_decompose(args) -> int:
             meta = json.loads(s_meta) if s_meta.startswith("{") else read_json(Path(s_meta))
         except (ValueError, OSError) as exc:
             raise SystemExit(U(f"rea-video: --meta 解析失败：{exc}", f"rea-video: invalid --meta: {exc}"))
+    yt_url = _resolve_youtube_url(getattr(args, "youtube_url", None))
     use_vlm = args.vlm or (pref("vlm") == "on" and not args.no_vlm)
     if use_vlm:
         _check_vlm_config()
@@ -103,7 +114,8 @@ def cmd_decompose(args) -> int:
     b = decompose(args.video, out, use_vlm=use_vlm, whole_vlm=not args.no_whole, ocr=not args.no_ocr,
                   workers=args.workers, engine=args.engine or pref("engine"), platform_meta=meta, stems=stems,
                   packaging=not args.no_packaging, lang=lang, asr=not args.no_asr, max_shots_vlm=max(1, args.max_vlm_shots),
-                  speakers=not args.no_speakers, survey=not args.no_survey, moments=not args.no_moments)
+                  speakers=not args.no_speakers, survey=not args.no_survey, moments=not args.no_moments,
+                  youtube_url=yt_url, yt_upload=bool(getattr(args, "yt_upload", False)))
     print(json.dumps({"out": str(out), "verdict": b["summary"]["verdict"], "shots": b["summary"]["shots"],
                       "confidence": b["summary"]["confidence"], "vlm": b["summary"]["vlm"],
                       "report": str(out / "report.html")}, ensure_ascii=False, indent=2))
@@ -170,11 +182,12 @@ def cmd_moments(args) -> int:
                  for s in (b.get("shots") or [])[1:] if s.get("transition")]
         m["measured"] = mo.measured(track, [s["start_frame"] for s in (b.get("shots") or [])[1:]], skip=skips)
     asker = None
+    yt_url = _resolve_youtube_url(getattr(args, "youtube_url", None)) or (b.get("source") or {}).get("youtube_url")
     if args.vlm or (pref("vlm") == "on" and not args.no_vlm):
         _check_vlm_config()
         from .vlm import prompt_lang_note
 
-        asker = mo.vlm_asker(_vlm_client(out), prompt_lang_note())
+        asker = mo.vlm_asker(_vlm_client(out, prefer_gemini=bool(yt_url)), prompt_lang_note(), youtube_url=yt_url)
     res = mo.run(b, out, asker=asker)
     if res["status"] == "waiting":
         res["next"] = T("看 images 里的图，按 tasks 里的说明把答案写进 waiting 里的文件（filled 改成 true），再运行同一条命令",
@@ -992,6 +1005,8 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--no-survey", action="store_true", help="开 VLM 时也不做总览 + 局部细看（只用切镜检测器的切点）")
     d.add_argument("--no-stems", action="store_true", help="不做人声/配乐分离（默认会输出 stems/original.wav、vocals.wav、music.wav）")
     d.add_argument("--no-moments", action="store_true", help="不找特殊时刻（魔术揭秘、反转、高潮、穿帮）；开 VLM 时默认会找，约多 3–5 次调用")
+    d.add_argument("--youtube-url", help="已上传到 YouTube 的链接（或设 $REA_YOUTUBE_URL）；传给 Gemini / 网关按 startOffset/endOffset 分析，免传本地大视频")
+    d.add_argument("--yt-upload", action="store_true", help="用本机 yt-upload 自动上传为 unlisted 并把链接传给 Gemini / 网关分析")
     d.set_defaults(func=cmd_decompose)
 
     st = sub.add_parser("stems", help="只把声音剥离成 原声 / 人声 / 配乐 三条轨")
@@ -1141,6 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
     mm.add_argument("--vlm", action="store_true", help="用配置的 VLM 自动回答（约 3–5 次调用）")
     mm.add_argument("--no-vlm", action="store_true", help="本次不用 VLM（覆盖 prefs 里的 vlm=on）：输出任务，由能看图的 agent 回答")
     mm.add_argument("--redo", action="store_true", help="丢掉上次的答案重新找")
+    mm.add_argument("--youtube-url", help="YouTube 链接（默认复用 breakdown.json 记录的链接或 $REA_YOUTUBE_URL）")
     mm.set_defaults(func=cmd_moments)
 
     rv = sub.add_parser("review", help="能看图的 agent 当 VLM：生成逐镜看图任务和答案模板")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -129,11 +130,18 @@ def decode_fingerprint() -> str:
 def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, whole_vlm: bool = True,
               ocr: bool = True, workers: int = 3, engine: str | None = None, max_shots_vlm: int = 60,
               platform_meta: dict | None = None, stems: bool = True, memory: bool = True, packaging: bool = True, asr: bool = True,
-              lang: str = "zh", speakers: bool = True, survey: bool = True, moments: bool = True) -> dict:
+              lang: str = "zh", speakers: bool = True, survey: bool = True, moments: bool = True,
+              youtube_url: str | None = None, yt_upload: bool = False) -> dict:
+    from . import gemini
+
     lang = set_lang(lang)
     require_tools()
     t0 = time.time()
     video = Path(video).expanduser().resolve()
+    yt_url = gemini.resolve_youtube_url(youtube_url)
+    if use_vlm and yt_upload and not yt_url:
+        yt_url = gemini.upload_youtube(video)
+        LOG.info("uploaded unlisted YouTube video: %s", yt_url)
     out = Path(out_dir).expanduser().resolve()
     (out / "shots").mkdir(parents=True, exist_ok=True)
     info = video_info(video)
@@ -149,7 +157,7 @@ def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, 
     timeline = load_timeline(out, video, info)
     vlm_client = None  # one client for the survey and the shot pass: a model found down stays skipped
     if (timeline is None or "keyframes" not in timeline) and use_vlm and survey:
-        vlm_client = make_client(out / "vlm_cache")
+        vlm_client = make_client(out / "vlm_cache", prefer_gemini=bool(yt_url))
         if vlm_client is not None:
             try:
                 got = run_survey(video, out, track, shots, info, asker=vlm_asker(vlm_client, prompt_lang_note()), workers=workers)
@@ -330,12 +338,13 @@ def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, 
     vlm_info = {"used": False, "requested": use_vlm, "status": "off"}
     whole = None
     if use_vlm:
-        vlm_client = vlm_client or make_client(out / "vlm_cache")
+        vlm_client = vlm_client or make_client(out / "vlm_cache", prefer_gemini=bool(yt_url))
         if vlm_client is None:
-            LOG.warning("--vlm requested but no VLM config found (GEMINI_API_KEY / REA_VLM_*); continuing without it")
+            LOG.warning("--vlm requested but no VLM config found (REA_GEMINI_API_KEY / GEMINI_API_KEY / REA_VLM_*); continuing without it")
             vlm_info = {"used": False, "requested": True, "status": "not_configured", "error": "no_config"}
         else:
             client = vlm_client
+            use_yt = bool(yt_url and getattr(client, "youtube_ok", False))
             vlm_info = {"used": False, "requested": True, "status": "failed", "model": client.describe(), "media": client.media, "errors": []}
 
             def run_unit(unit: list[dict]) -> None:
@@ -359,12 +368,15 @@ def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, 
                 fallback = None
                 try:
                     if client.media in ("both", "video"):  # a clip that fails to encode costs this unit its video, not the run
-                        clip = cut_clip(video, first["start"], min(span, 12.0), out / "clips" / f"{first['id']}.mp4", width=480, audio=spoken)
-                        media.insert(0, (clip, "video/mp4"))
+                        if use_yt:
+                            media.insert(0, (gemini.YouTubeClip(yt_url, first["start"], first["start"] + min(span, 12.0)), "video/mp4"))
+                        else:
+                            clip = cut_clip(video, first["start"], min(span, 12.0), out / "clips" / f"{first['id']}.mp4", width=480, audio=spoken)
+                            media.insert(0, (clip, "video/mp4"))
                     raw = client.ask_json(prompt, media)
                 except Exception as exc:  # keep going; deterministic result stands
                     raw = None
-                    if spoken and client.media in ("both", "video"):  # an endpoint that refuses a clip with sound still gets the picture
+                    if spoken and not use_yt and client.media in ("both", "video"):  # an endpoint that refuses a clip with sound still gets the picture
                         try:
                             clip = cut_clip(video, first["start"], min(span, 12.0), out / "clips" / f"{first['id']}_mute.mp4", width=480)
                             raw = client.ask_json(prompt.replace(SOUND_NOTE, SILENT_NOTE.replace("这一段没检测到人声，", "")),
@@ -397,9 +409,11 @@ def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, 
                     fut.result()
             if whole_vlm:
                 try:
-                    low = cut_clip(video, 0, info.duration, out / "clips" / "whole_480p.mp4", width=480, audio=True, crf=30)
+                    whole_media = [(gemini.YouTubeClip(yt_url), "video/mp4")] if use_yt else [
+                        (cut_clip(video, 0, info.duration, out / "clips" / "whole_480p.mp4", width=480, audio=True, crf=30), "video/mp4")
+                    ]
                     cuts = ", ".join(f"{r['start']:.2f}" for r in shot_records)
-                    whole = normalize_whole(client.ask_json(WHOLE_PROMPT.format(shots=cuts) + prompt_lang_note(), [(low, "video/mp4")],
+                    whole = normalize_whole(client.ask_json(WHOLE_PROMPT.format(shots=cuts) + prompt_lang_note(), whole_media,
                                                              # a long video has more lines, effects and segments to list: a fixed budget cut
                                                              # the answer off mid-JSON and the whole pass was paid for and lost
                                                              max_tokens=int(min(16000, max(6000, 2000 + 100 * info.duration)))))
@@ -461,7 +475,8 @@ def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, 
         "schema": SCHEMA, "tool": {"name": "rea-video", "version": __version__}, "lang": lang,
         "source": {"path": str(video), "filename": video.name, "sha256_head": _sha256_head(video), "width": info.width,
                    "height": info.height, "fps": round(info.fps, 3), "duration": round(info.duration, 3), "vcodec": info.vcodec,
-                   "aspect_ratio": info.aspect_ratio, "has_audio": info.has_audio, "rotation": info.rotation},
+                   "aspect_ratio": info.aspect_ratio, "has_audio": info.has_audio, "rotation": info.rotation,
+                   **({"youtube_url": yt_url} if yt_url else {})},
         "provenance": {k: v for k, v in prov.items() if k != "tags"}, "summary": {},
         "audio": round_floats(audio), "global_layers": round_floats(template), "whole_video_vlm": whole,
         "shots": shot_records, "analysis": {"vlm": vlm_info, "ocr": ocr, "seconds": round(time.time() - t0, 1), "decode_fp": decode_fingerprint()},
@@ -480,10 +495,8 @@ def decompose(video: str | Path, out_dir: str | Path, *, use_vlm: bool = False, 
     if moments:
         mclient = vlm_client if vlm_info.get("used") else None
         if mclient is None and use_vlm:  # asked for a VLM but only a Gemini key is set: Gemini's own API reads the moments
-            from . import gemini
-
             if gemini.configured():
-                mclient = gemini.GeminiClient()
+                mclient = gemini.GeminiClient(cache_dir=out / "vlm_cache")
         _moments(breakdown, out, track, stem_info, mclient)
     if memory:
         from .memory import reapply
@@ -521,7 +534,8 @@ def _moments(b: dict, out: Path, track, stem_info: dict, client) -> None:
             from .vlm import prompt_lang_note
 
             LOG.info("special moments: the VLM looks for them (%s)", b["moments"]["genre"] or "any video")
-            got = mo.run(b, out, asker=mo.vlm_asker(client, prompt_lang_note()))
+            yt_src = (b.get("source") or {}).get("youtube_url")
+            got = mo.run(b, out, asker=mo.vlm_asker(client, prompt_lang_note(), youtube_url=yt_src))
             LOG.info("special moments: %s", got)
     except Exception as exc:  # noqa: BLE001  an extra: the breakdown goes on without it
         LOG.warning("special moments skipped: %s", str(exc)[:160])

@@ -16,7 +16,6 @@ eval/*
 .env.*
 !.env.example
 scripts/roundtrip_compare.py
-tests/
 CHANGELOG.md
 CLAUDE.md
 IGNORE/
