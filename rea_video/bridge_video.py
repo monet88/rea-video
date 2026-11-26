@@ -99,7 +99,7 @@ def collect_video_tasks(
     """Collect unit/part and standalone avatar video tasks, filtered by `--only`."""
     out_dir = Path(out_dir)
     plan = plan if plan is not None else (b.get("production_plan") or {})
-    only_shots = parse_only(cfg.only)
+    only_shots = parse_only(cfg.only, units=plan.get("units"))
     shots_by_idx = {int(r["index"]): r for r in b.get("shots") or []}
     video_dir = out_dir / "remake" / "bridge" / "video"
 
@@ -156,6 +156,10 @@ def collect_video_tasks(
     return tasks
 
 
+def _flow_resolution(res: str | None) -> str:
+    return "360p" if res == "360p" else "720p"
+
+
 def _build_flow_cmd(
     cli_path: str,
     cfg: BridgeConfig,
@@ -183,7 +187,7 @@ def _build_flow_cmd(
         "--aspect",
         aspect,
         "--resolution",
-        cfg.resolution,
+        _flow_resolution(cfg.resolution),
         "--duration",
         str(duration),
         "--output",
@@ -199,11 +203,11 @@ def _build_flow_cmd(
         if not ref_clip:
             raise BridgeError(f"{task_id}: {strategy} strategy requires a reference video clip")
         cmd.extend(["--ref-video", ref_clip])
-        for rp in refs[:_FLOW_MAX_REFS]:
-            cmd.extend(["--ref", rp])
+        if refs:
+            cmd.extend(["--ref", *refs[:_FLOW_MAX_REFS]])
     elif strategy == "keyframes":
-        for rp in refs[:_FLOW_MAX_REFS]:
-            cmd.extend(["--ref", rp])
+        if refs:
+            cmd.extend(["--ref", *refs[:_FLOW_MAX_REFS]])
     elif strategy == "frames":
         if not first_frame:
             raise BridgeError(f"{task_id}: frames strategy requires a first frame")
@@ -259,15 +263,15 @@ def _build_vids_cmd(
     if is_avatar or strategy == "avatar":
         if cfg.avatar:
             cmd = [cli_path, "create", "--prompt", prompt, "--avatar", cfg.avatar]
-            for rp in refs[:_VIDS_CREATE_MAX_INGREDIENTS]:
-                cmd.extend(["--ingredients", rp])
+            if refs:
+                cmd.extend(["--ingredients", *refs[:_VIDS_CREATE_MAX_INGREDIENTS]])
             cmd.extend(tail)
             return cmd, False
         if first_frame:
             return [cli_path, "animate", "--input", first_frame, "--prompt", prompt, *tail], False
         cmd = [cli_path, "create", "--prompt", prompt]
-        for rp in refs[:_VIDS_CREATE_MAX_INGREDIENTS]:
-            cmd.extend(["--ingredients", rp])
+        if refs:
+            cmd.extend(["--ingredients", *refs[:_VIDS_CREATE_MAX_INGREDIENTS]])
         cmd.extend(tail)
         return cmd, False
 
@@ -275,8 +279,8 @@ def _build_vids_cmd(
         if not ref_clip:
             raise BridgeError(f"{task_id}: vids {strategy} requires a reference video clip")
         cmd = [cli_path, "edit", "--input", ref_clip, "--prompt", prompt]
-        for rp in refs[:_VIDS_EDIT_MAX_REFS]:
-            cmd.extend(["--ref", rp])
+        if refs:
+            cmd.extend(["--ref", *refs[:_VIDS_EDIT_MAX_REFS]])
         if cfg.avatar:
             cmd.extend(["--avatar", cfg.avatar])
         cmd.extend(tail)
@@ -289,9 +293,8 @@ def _build_vids_cmd(
 
     if strategy in ("keyframes", "text"):
         cmd = [cli_path, "create", "--prompt", prompt]
-        if strategy == "keyframes":
-            for rp in refs[:_VIDS_CREATE_MAX_INGREDIENTS]:
-                cmd.extend(["--ingredients", rp])
+        if strategy == "keyframes" and refs:
+            cmd.extend(["--ingredients", *refs[:_VIDS_CREATE_MAX_INGREDIENTS]])
         if cfg.avatar:
             cmd.extend(["--avatar", cfg.avatar])
         cmd.extend(tail)

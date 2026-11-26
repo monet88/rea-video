@@ -76,9 +76,23 @@ def test_collect_video_tasks_includes_units_standalone_avatar_and_only_filter(tm
     filtered = collect_video_tasks(b, pkg, BridgeConfig(out_dir=pkg, only="2,4"))
     assert [t["id"] for t in filtered] == ["G2-1", "G2-2", "avatar_shot002"]
 
+    unit_filtered = collect_video_tasks(b, pkg, BridgeConfig(out_dir=pkg, only="G2"))
+    assert [t["id"] for t in unit_filtered] == ["G2-1", "G2-2"]
+
 
 def _opt_values(cmd: list[str], flag: str) -> list[str]:
     return [cmd[i + 1] for i, tok in enumerate(cmd) if tok == flag and i + 1 < len(cmd)]
+
+
+def _opt_multi_values(cmd: list[str], flag: str) -> list[str]:
+    if flag not in cmd:
+        return []
+    vals: list[str] = []
+    for tok in cmd[cmd.index(flag) + 1 :]:
+        if tok.startswith("--"):
+            break
+        vals.append(tok)
+    return vals
 
 
 def test_run_video_stage_routes_all_flow_strategies_and_redrawn_frames(tmp_path):
@@ -436,6 +450,46 @@ def test_run_video_stage_skipped_frames_bookend_respects_redrawn_subject(tmp_pat
     run_video_stage(cfg, b, b["production_plan"])
     mine2 = read_json(pkg / "remake" / "mine.json")["results"]
     assert mine2["1"]["bookend"] is True
+
+
+def test_flow_video_clamps_1080p_and_packs_multi_refs_in_single_flag(tmp_path):
+    from rea_video.bridge_video import _build_flow_cmd, _build_vids_cmd
+
+    cfg = BridgeConfig(out_dir=tmp_path, resolution="1080p")
+    flow_cmd, _ = _build_flow_cmd(
+        "flow.cmd",
+        cfg,
+        "9:16",
+        "prompt",
+        "keyframes",
+        5.0,
+        tmp_path / "g1.mp4",
+        ref_clip=None,
+        refs=["a.png", "b.png"],
+        first_frame=None,
+        last_frame=None,
+        task_id="G1",
+    )
+    assert _opt_values(flow_cmd, "--resolution") == ["720p"]
+    assert flow_cmd.count("--ref") == 1
+    assert _opt_multi_values(flow_cmd, "--ref") == ["a.png", "b.png"]
+
+    vids_cmd, _ = _build_vids_cmd(
+        "vids.cmd",
+        cfg,
+        "9:16",
+        "prompt",
+        "keyframes",
+        5.0,
+        tmp_path / "g2.mp4",
+        is_avatar=False,
+        ref_clip=None,
+        refs=["a.png", "b.png"],
+        first_frame=None,
+        task_id="G2",
+    )
+    assert vids_cmd.count("--ingredients") == 1
+    assert _opt_multi_values(vids_cmd, "--ingredients") == ["a.png", "b.png"]
 
 
 

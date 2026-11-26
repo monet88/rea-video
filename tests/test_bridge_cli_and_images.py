@@ -230,7 +230,7 @@ def test_bridge_gptimg_and_flow_cli_backends_and_only_force_skip(tmp_path, capsy
             self.stdout = stdout
             self.stderr = ""
 
-    def fake_run(cmd, capture_output=True, text=True, check=False):
+    def fake_run(cmd, capture_output=True, text=True, encoding=None, errors=None, check=False):
         seen_cmds.append(cmd)
         out_idx = cmd.index("--output") + 1
         Path(cmd[out_idx]).write_bytes(b"cli-generated")
@@ -398,3 +398,92 @@ def test_bridge_dry_run_preview_parity_video_and_audio(tmp_path, capsys):
     assert out["audio"]["would_skip_lines"] == 1
     assert out["audio"]["mix_would_skip"] is True
     assert out["audio"]["would_skip"] is False
+
+
+def test_bridge_multi_ref_single_flag_and_unit_only_selector(tmp_path, capsys):
+    pkg = _make_package(tmp_path)
+    bpath = pkg / "breakdown.json"
+    b = json.loads(bpath.read_text(encoding="utf-8"))
+    swap = tmp_path / "swap.png"
+    swap.write_bytes(b"swap")
+    b["production_plan"]["own_refs"] = [{"path": str(swap)}]
+    b["production_plan"]["units"] = [{"id": "G1", "shots": [1], "strategy": "text", "duration": 4.0, "calls": 1}]
+    b["production_plan"]["image_tasks"] = [
+        {
+            "shot": 1,
+            "role": "first_frame",
+            "method": "i2i",
+            "prompt": "two refs",
+            "source_frame": str(pkg / "shot001_first.jpg"),
+            "target": "remake/redrawn/shot001.png",
+        },
+        {
+            "shot": 2,
+            "role": "first_frame",
+            "method": "t2i",
+            "prompt": "other shot",
+            "source_frame": str(pkg / "shot001_first.jpg"),
+            "target": "remake/redrawn/shot002.png",
+        },
+    ]
+    write_json(bpath, b)
+
+    seen_cmds: list[list[str]] = []
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str):
+            self.stdout = stdout
+
+    def fake_run(cmd, **_kw):
+        seen_cmds.append(cmd)
+        out_p = Path(cmd[cmd.index("--output") + 1])
+        out_p.write_bytes(b"img")
+        return FakeProc(json.dumps({"ok": True, "path": str(out_p)}))
+
+    with (
+        patch("shutil.which", return_value="C:\\bin\\flow.cmd"),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
+        rc = cli.main(["bridge", str(pkg), "--stage", "images", "--image-backend", "flow", "--only", "G1", "--run"])
+
+    assert rc == 0
+    assert len(seen_cmds) == 1
+    cmd = seen_cmds[0]
+    assert cmd.count("--ref") == 1
+    ref_idx = cmd.index("--ref")
+    assert cmd[ref_idx + 1] == str(pkg / "shot001_first.jpg")
+    assert cmd[ref_idx + 2] == str(swap)
+
+
+def test_run_cli_json_flattens_multiline_prompts():
+    from rea_video.bridge import _run_cli_json
+
+    seen: list[list[str]] = []
+
+    class FakeProc:
+        returncode = 0
+        stdout = '{"ok": true}'
+        stderr = ""
+
+    def fake_run(cmd, **_kw):
+        seen.append(cmd)
+        return FakeProc()
+
+    with patch("subprocess.run", side_effect=fake_run):
+        res = _run_cli_json(["flow.cmd", "video", "--prompt", "line1\nline2\r\nline3", "--json"])
+
+    assert res == {"ok": True}
+    assert seen[0] == ["flow.cmd", "video", "--prompt", "line1 line2 line3", "--json"]
+
+
+def test_parse_only_unknown_or_empty_unit_never_runs_all():
+    from rea_video.bridge import BridgeError, parse_only
+
+    with pytest.raises(BridgeError, match="Unknown generation unit"):
+        parse_only("G99", units=[{"id": "G1", "shots": [1]}])
+    with pytest.raises(BridgeError, match="Unknown generation unit"):
+        parse_only("G1", units=None)
+    assert parse_only("G1", units=[{"id": "G1", "shots": []}]) == set()

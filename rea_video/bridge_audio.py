@@ -154,7 +154,14 @@ def load_or_create_dubbing_script(b: dict, out_dir: Path, cfg: BridgeConfig) -> 
 
 
 def _run_ffmpeg(args: list[str]) -> None:
-    proc = subprocess.run(["ffmpeg", "-v", "error", "-y", *args], capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip() or f"exit code {proc.returncode}"
         raise BridgeError(f"ffmpeg failed: {detail}")
@@ -177,6 +184,8 @@ def _probe_audio_duration(path: Path) -> float:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if proc.returncode == 0 and proc.stdout:

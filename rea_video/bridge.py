@@ -51,14 +51,22 @@ class BridgeConfig:
     retime: str = "smooth"
 
 
-def parse_only(only: str | None) -> set[int] | None:
-    """Parse --only shot selector (e.g. '1,3-5,shot_007') into a set of 1-based shot indices, or None for all."""
-    if not only or only.strip().lower() == "all":
+def parse_only(only: str | None, *, units: list[dict] | None = None) -> set[int] | None:
+    """Parse --only selector (e.g. '1,3-5,shot_007,G1') into 1-based shot indices, or None for all."""
+    if not only or not only.strip() or only.strip().lower() == "all":
         return None
+    unit_map = {str(u.get("id") or "").strip().upper(): [int(s) for s in (u.get("shots") or [])] for u in (units or [])}
     shots: set[int] = set()
-    for part in only.split(","):
-        tok = part.strip().lower()
-        if not tok:
+    tokens = [part.strip() for part in only.split(",") if part.strip()]
+    if not tokens:
+        return None
+    for part in tokens:
+        tok = part.lower()
+        if re.fullmatch(r"g\d+", tok):
+            uid = tok.upper()
+            if uid not in unit_map:
+                raise BridgeError(f"Unknown generation unit in --only: {part!r}")
+            shots.update(unit_map[uid])
             continue
         m_range = re.fullmatch(r"(?:shot_?)?(\d+)\s*-\s*(?:shot_?)?(\d+)", tok)
         if m_range:
@@ -70,7 +78,7 @@ def parse_only(only: str | None) -> set[int] | None:
             shots.add(int(m_one.group(1)))
             continue
         raise BridgeError(f"Invalid --only shot selector: {part!r}")
-    return shots or None
+    return shots
 
 
 def _resolve_cli(name: str) -> str:
@@ -84,7 +92,12 @@ def _resolve_cli(name: str) -> str:
 def _run_cli_json(cmd: list[str], *, shot_id: str | None = None) -> dict[str, Any]:
     """Run a local CLI command with --json and parse its JSON response, raising BridgeError on failure."""
     prefix = f"{shot_id}: " if shot_id else ""
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    # Windows .cmd/.bat shims pass %* through cmd.exe, which truncates arguments at embedded newlines.
+    clean_cmd = [
+        re.sub(r"\s*[\r\n]+\s*", " ", str(tok)).strip() if ("\n" in str(tok) or "\r" in str(tok)) else str(tok)
+        for tok in cmd
+    ]
+    proc = subprocess.run(clean_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     data: dict[str, Any] | None = None
@@ -295,7 +308,7 @@ def _gateway_image_request(
 def run_images_stage(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
     """Generate Redrawn Frames for planned image_tasks via gateway, gptimg, or flow."""
     out_dir = Path(cfg.out_dir)
-    only_shots = parse_only(cfg.only)
+    only_shots = parse_only(cfg.only, units=plan.get("units"))
     aspect = (b.get("source") or {}).get("aspect_ratio")
     size = aspect_to_gateway_size(aspect)
     cli_aspect = normalize_aspect(aspect, ("16:9", "9:16", "1:1", "4:3", "3:4"), default="1:1")
@@ -347,8 +360,8 @@ def run_images_stage(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
                 cfg.pool_strategy,
                 "--json",
             ]
-            for rp in ref_paths:
-                cmd.extend(["--ref", str(rp)])
+            if ref_paths:
+                cmd.extend(["--ref", *[str(rp) for rp in ref_paths]])
             if cfg.profile:
                 cmd.extend(["--profile", cfg.profile])
             _run_cli_json(cmd, shot_id=shot_id)
@@ -377,10 +390,10 @@ def _video_backend_for_unit(unit: dict, shots_by_idx: dict[int, dict], cfg: Brid
 
 def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
     """Preview planned images, video, audio, and assemble work without calling any external API, CLI, or FFmpeg."""
-    from .bridge_video import collect_video_tasks
+    from .bridge_video import _flow_resolution, _vids_resolution, collect_video_tasks
 
     out_dir = Path(cfg.out_dir)
-    only_shots = parse_only(cfg.only)
+    only_shots = parse_only(cfg.only, units=plan.get("units"))
     selected = list(STAGES) if cfg.stage == "all" else [cfg.stage]
 
     img_tasks_preview: list[dict[str, Any]] = []
@@ -406,7 +419,7 @@ def plan_dry_run(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
             "shots": t["shots"],
             "strategy": t["strategy"],
             "backend": t["backend"],
-            "resolution": cfg.resolution,
+            "resolution": _vids_resolution(cfg.resolution) if t["backend"] == "vids" else _flow_resolution(cfg.resolution),
             "output": str(t["output"]),
             "would_skip": bool(Path(t["output"]).is_file() and not cfg.force),
         }

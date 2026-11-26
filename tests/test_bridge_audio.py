@@ -176,7 +176,7 @@ def test_run_audio_stage_clones_synthesizes_aligns_and_mixes(tmp_path: Path):
             return FakeResp(b"RIFF\x24\x00\x00\x00WAVEfmt ")
         raise AssertionError(f"Unexpected URL: {req.full_url}")
 
-    def fake_subproc(cmd, capture_output=False, text=False, check=False):
+    def fake_subproc(cmd, **_kw):
         ff_cmds.append(list(cmd))
         exe = Path(cmd[0]).name.lower()
         if exe == "ffprobe":
