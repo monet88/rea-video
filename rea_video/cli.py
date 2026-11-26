@@ -446,8 +446,10 @@ def cmd_assemble(args) -> int:
         mine = out_dir / "mine.json"
         extra = read_json(mine).get("results", {}) if mine.is_file() else {}
         code_v = pkg / "code" / "remake.mp4"
+        audio = Path(args.audio).expanduser().resolve() if getattr(args, "audio", None) else None
         log_txt = local_assemble(bpath, rpath, out_dir=out_dir, overlays=bool(args.overlays),
-                                 code_video=code_v if code_v.is_file() else None, extra=extra, retime="smooth")
+                                 code_video=code_v if code_v.is_file() else None, extra=extra, retime="smooth",
+                                 audio=audio)
         print(log_txt)
         log = json.loads(log_txt)
         root = capsule_root(getattr(args, "capsule_root", None))
@@ -1068,6 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="把测得的字幕 / 花字 / 标题按原样式叠回换掉的镜头（保留原片的镜头本来就有）；贴纸只列出来，要自己找素材")
     a.add_argument("--retime", choices=["smooth", "warp"], default="smooth",
                    help="时间对齐方式：smooth 均匀连续帧混合重采样、零冻结帧（默认）/ warp 离散运动峰值动态时间规整")
+    a.add_argument("--audio", help="外部音频路径（如配音混音 wav），用来替换原片音频")
     a.set_defaults(func=cmd_assemble)
 
     t = sub.add_parser("tiles", help="按时间抽帧拼图，近距离检查某一段（agent 复核用）")

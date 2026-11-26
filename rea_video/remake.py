@@ -367,9 +367,14 @@ def unit_shots(b: dict, results: dict, udir: Path, size: tuple[int, int], fps: f
 
 
 def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = None, overlays: bool = False,
-             code_video: Path | None = None, extra: dict | None = None, retime: str = "smooth") -> str:
+             code_video: Path | None = None, extra: dict | None = None, retime: str = "smooth",
+             audio: Path | None = None) -> str:
     """code_video: a remake of the code-rendered shots on the original timeline (`code-remake`), cut in for them.
-    extra: more {shot: {"video": path}} results on top of results_path's (later ones win)."""
+    extra: more {shot: {"video": path}} results on top of results_path's (later ones win).
+    audio: optional external audio track to mux into remake.mp4 and compare.mp4 instead of source audio."""
+    audio_path = Path(audio) if audio is not None else None
+    if audio_path is not None and not audio_path.is_file():
+        raise FileNotFoundError(audio_path)
     b = read_json(breakdown_path)
     bdir = breakdown_path.parent
     jobs_path = results_path.with_name("jobs.json")
@@ -440,19 +445,22 @@ def assemble(breakdown_path: Path, results_path: Path, out_dir: Path | None = No
                 overlay_log["error"] = f"ffmpeg ass filter failed ({exc.returncode}); overlays_remake.ass can be burned in another editor"
                 LOG.warning(overlay_log["error"])
     final = out_dir / "remake.mp4"
-    if b["source"].get("has_audio"):
+    if audio_path is not None:
+        _ff(["-i", str(silent), "-i", str(audio_path), "-map", "0:v", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", str(final)])
+    elif b["source"].get("has_audio"):
         _ff(["-i", str(silent), "-i", str(src), "-map", "0:v", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-shortest", str(final)])
     else:
         final = silent
     compare = out_dir / "compare.mp4"
     ch = 720 if h >= 720 else h - h % 2
     label = ",drawtext=text='{t}':x=10:y=10:fontcolor=white:box=1:boxcolor=black@0.5"
+    compare_audio_map = "1:a?" if audio_path is not None else "0:a?"
     for with_text in (True, False):  # drawtext needs libfreetype; fall back to plain hstack
         la, lb = (label.format(t="original"), label.format(t="remake")) if with_text else ("", "")
         try:
             _ff(["-i", str(src), "-i", str(final), "-filter_complex",
                  f"[0:v]scale=-2:{ch}{la}[a];[1:v]scale=-2:{ch}{lb}[b];[a][b]hstack=inputs=2[v]",
-                 "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-crf", "23", "-pix_fmt", "yuv420p", "-shortest", str(compare)])
+                 "-map", "[v]", "-map", compare_audio_map, "-c:v", "libx264", "-crf", "23", "-pix_fmt", "yuv420p", "-shortest", str(compare)])
             break
         except subprocess.CalledProcessError:
             if not with_text:

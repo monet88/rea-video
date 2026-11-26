@@ -322,8 +322,8 @@ models:
     limits:
       duration_s: {min: 3, max: 15}
       resolutions: [720p, 1080p, 4K]
-      refs: {image: 6, video: 1}
-      ref_video_s: {max: 3}
+      refs: {image: 10, video: 1}
+      ref_video_s: {max: 15}
     audio: {native: true}
     strengths:
       - 文本、图像、音频、视频任意组合输入；草图可作为动作引导

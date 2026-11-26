@@ -74,6 +74,7 @@ HELP = {
     "assemble.retime": "timing alignment: smooth frame-blended resampling with zero frozen frames (default) / warp discrete DTW peak matching",
     "assemble.capsule_root": _CAPSULE_ROOT,
     "assemble.overlays": "put measured captions / styled text / titles back on replaced shots in their original style (kept shots already have them); stickers are only listed, so source them yourself",
+    "assemble.audio": "external audio file (e.g. dubbed mix) to mux into remake.mp4 and compare.mp4 instead of source audio",
 
     "tiles": "tile frames over time to inspect a section closely (for agent review)",
     "tiles.focus": "zoom into part of the frame at --cell width: x0,y0,x1,y1 (0-1, full-frame coordinates); with --grid, the grid uses this region's coordinates",
