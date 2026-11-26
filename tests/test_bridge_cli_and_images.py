@@ -487,3 +487,94 @@ def test_parse_only_unknown_or_empty_unit_never_runs_all():
     with pytest.raises(BridgeError, match="Unknown generation unit"):
         parse_only("G1", units=None)
     assert parse_only("G1", units=[{"id": "G1", "shots": []}]) == set()
+
+
+def test_bridge_gemini_image_generate_content_t2i_i2i_anchor_and_refusal(tmp_path, monkeypatch, capsys):
+    import base64
+
+    pkg = _make_package(tmp_path)
+    bpath = pkg / "breakdown.json"
+    b = json.loads(bpath.read_text(encoding="utf-8"))
+    b["production_plan"]["image_tasks"].append({
+        "shot": 2,
+        "role": "first_frame",
+        "method": "i2i",
+        "refs": ["镜头 #1 生成的首帧基准图（锁主角）", "`shot001_first.jpg`"],
+        "prompt": "Keep character from shot #1",
+        "source_frame": str(pkg / "shot001_first.jpg"),
+        "target": "remake/redrawn/shot002.png",
+    })
+    write_json(bpath, b)
+
+    monkeypatch.setenv("REA_IMAGE_API_BASE", "https://cliproxy.monet.uno")
+    monkeypatch.setenv("REA_IMAGE_API_KEY", "cliproxy-key")
+
+    calls = []
+    out_png = b"gemini-generated-png"
+
+    class FakeResp:
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=180.0):
+        calls.append((req.full_url, dict(req.header_items()), json.loads(req.data.decode("utf-8"))))
+        resp = {
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"thought": True, "inlineData": {"mimeType": "image/png", "data": base64.b64encode(b"wrong").decode()}},
+                        {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(out_png).decode()}},
+                    ]
+                }
+            }]
+        }
+        return FakeResp(json.dumps(resp).encode("utf-8"))
+
+    # Run shot 1 (T2I) then shot 2 (I2I with shot 1 as anchor)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        rc = cli.main([
+            "bridge", str(pkg), "--stage", "images",
+            "--image-backend", "gateway", "--image-model", "gemini-3.1-flash-image",
+            "--run",
+        ])
+
+    assert rc == 0
+    assert len(calls) == 2
+
+    # T2I shot 1 sends only prompt (no inlineData even though source_frame exists)
+    url1, headers1, body1 = calls[0]
+    assert url1 == "https://cliproxy.monet.uno/v1beta/models/gemini-3.1-flash-image:generateContent"
+    assert headers1["X-goog-api-key"] == "cliproxy-key"
+    assert body1["generationConfig"] == {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}}
+    assert body1["contents"][0]["parts"] == [{"text": "cybernetic cat in neon rain"}]
+
+    # I2I shot 2 sends prompt + anchor shot001.png + source_frame
+    parts2 = calls[1][2]["contents"][0]["parts"]
+    assert parts2[0] == {"text": "Keep character from shot #1"}
+    assert len(parts2) == 3
+    assert base64.b64decode(parts2[1]["inlineData"]["data"]) == out_png
+    assert (pkg / "remake" / "redrawn" / "shot002.png").read_bytes() == out_png
+
+    # Refusal with finishReason=STOP still surfaces text reason
+    def fake_refusal(req, timeout=180.0):
+        return FakeResp(json.dumps({"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "cannot render policy"}]}}]}).encode("utf-8"))
+
+    capsys.readouterr()
+    with patch("urllib.request.urlopen", side_effect=fake_refusal):
+        rc_fail = cli.main([
+            "bridge", str(pkg), "--stage", "images",
+            "--image-backend", "gateway", "--image-model", "gemini-3.1-flash-image",
+            "--only", "1", "--force", "--run",
+        ])
+    assert rc_fail == 2
+    err = capsys.readouterr().err
+    assert "shot_001" in err and "cannot render policy" in err

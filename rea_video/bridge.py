@@ -237,6 +237,11 @@ def _collect_task_refs(out_dir: Path, task: dict, plan: dict) -> list[Path]:
     if task.get("role") == "last_frame":
         add_if_file(redrawn_frame(out_dir, f"shot{shot_idx:03d}"))
 
+    for ref_note in task.get("refs") or []:
+        m = re.search(r"(?:镜头\s*#|shot\s*#)(\d+)", str(ref_note), re.I)
+        if m and int(m.group(1)) != shot_idx:
+            add_if_file(redrawn_frame(out_dir, f"shot{int(m.group(1)):03d}"))
+
     img_ref = str(task.get("image_ref") or "auto").strip().lower()
     if img_ref in ("source", "depth", "edge"):
         suffix = "clean" if img_ref == "source" else img_ref
@@ -251,6 +256,57 @@ def _collect_task_refs(out_dir: Path, task: dict, plan: dict) -> list[Path]:
     return refs
 
 
+def _is_gemini_image_model(model: str) -> bool:
+    return bool(re.search(r"(?:^|/)gemini-[^/]*-image", model.strip(), re.I))
+
+
+def _build_gemini_image_request(
+    base_v1: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    aspect: str,
+    ref_paths: list[Path],
+    method: str,
+) -> tuple[str, bytes, dict[str, str]]:
+    root_base = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
+    url = f"{root_base}/v1beta/models/{model}:generateContent"
+    parts: list[dict[str, Any]] = [{"text": prompt}]
+    if method == "i2i" and ref_paths:
+        for p in ref_paths:
+            mime, _ = mimetypes.guess_type(str(p))
+            if not mime or not mime.startswith("image/"):
+                mime = "image/png"
+            parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(p.read_bytes()).decode("ascii")}})
+    body = json.dumps({
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "imageConfig": {"aspectRatio": aspect},
+        },
+    }).encode("utf-8")
+    return url, body, {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+
+
+def _extract_gemini_image_bytes(payload: Any, shot_id: str) -> bytes:
+    cands = payload.get("candidates") if isinstance(payload, dict) else None
+    first = cands[0] if isinstance(cands, list) and cands and isinstance(cands[0], dict) else {}
+    cand_parts = ((first.get("content") or {}).get("parts")) or []
+    texts: list[str] = []
+    for pt in cand_parts:
+        if not isinstance(pt, dict) or pt.get("thought") is True:
+            continue
+        inline = pt.get("inlineData") or pt.get("inline_data") or {}
+        if isinstance(inline, dict) and inline.get("data"):
+            return base64.b64decode(inline["data"])
+        if pt.get("text"):
+            texts.append(str(pt["text"]).strip())
+    reason = first.get("finishReason") or ((payload.get("promptFeedback") or {}).get("blockReason") if isinstance(payload, dict) else None)
+    text_msg = " / ".join(t for t in texts if t)[:160]
+    detail = "; ".join(x for x in (reason, text_msg) if x) or "no candidates"
+    raise BridgeError(f"{shot_id}: gateway Gemini image returned no image data ({detail})")
+
+
 def _gateway_image_request(
     base_v1: str,
     api_key: str,
@@ -260,30 +316,29 @@ def _gateway_image_request(
     ref_paths: list[Path],
     method: str,
     shot_id: str,
+    *,
+    aspect: str = "1:1",
 ) -> bytes:
-    """Call OpenAI-compatible /images/generations (T2I) or /images/edits (I2I) and return image bytes."""
-    if method == "i2i" and ref_paths:
-        url = f"{base_v1}/images/edits"
-        field = "image" if len(ref_paths) == 1 else "image[]"
-        body, content_type = _encode_multipart(
-            {"model": model, "prompt": prompt, "size": size, "n": "1"},
-            [(field, p) for p in ref_paths],
-        )
+    """Call OpenAI-compatible /images/* or Gemini :generateContent and return image bytes."""
+    is_gemini = _is_gemini_image_model(model)
+    if is_gemini:
+        url, body, headers = _build_gemini_image_request(base_v1, api_key, model, prompt, aspect, ref_paths, method)
     else:
-        url = f"{base_v1}/images/generations"
-        body = json.dumps({"model": model, "prompt": prompt, "size": size, "n": 1}).encode("utf-8")
-        content_type = "application/json"
+        if method == "i2i" and ref_paths:
+            url = f"{base_v1}/images/edits"
+            field = "image" if len(ref_paths) == 1 else "image[]"
+            body, content_type = _encode_multipart(
+                {"model": model, "prompt": prompt, "size": size, "n": "1"},
+                [(field, p) for p in ref_paths],
+            )
+        else:
+            url = f"{base_v1}/images/generations"
+            body = json.dumps({"model": model, "prompt": prompt, "size": size, "n": 1}).encode("utf-8")
+            content_type = "application/json"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": content_type}
 
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": content_type,
-        },
-    )
-    raw = urlopen_bytes(req, timeout=120.0, label=f"{shot_id}: gateway request failed")
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    raw = urlopen_bytes(req, timeout=180.0, label=f"{shot_id}: gateway request failed")
 
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -292,6 +347,9 @@ def _gateway_image_request(
 
     if isinstance(payload, dict) and payload.get("error"):
         raise BridgeError(f"{shot_id}: gateway error: {payload['error']}")
+
+    if is_gemini:
+        return _extract_gemini_image_bytes(payload, shot_id)
 
     items = (payload or {}).get("data") if isinstance(payload, dict) else None
     if not items or not isinstance(items, list):
@@ -341,7 +399,7 @@ def run_images_stage(cfg: BridgeConfig, b: dict, plan: dict) -> dict[str, Any]:
                 gw_cfg = resolve_gateway_config(cfg.image_model)
             base_v1, api_key, model = gw_cfg
             img_bytes = _gateway_image_request(
-                base_v1, api_key, model, prompt, size, ref_paths, method, shot_id
+                base_v1, api_key, model, prompt, size, ref_paths, method, shot_id, aspect=cli_aspect
             )
             target.write_bytes(img_bytes)
         elif cfg.image_backend in ("gptimg", "flow"):
