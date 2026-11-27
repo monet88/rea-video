@@ -660,3 +660,16 @@ def test_bridge_dry_run_shows_upscale_action_and_only_shots(tmp_path, capsys):
     assert out["video"]["units"][0]["would_skip"] is False
     assert out["assemble"]["only_shots"] == [1]
 
+
+def test_bridge_cli_bilingual_parity(capsys):
+    import re
+    from rea_video import cli_en
+
+    with pytest.raises(SystemExit):
+        cli.main(["bridge", "--help"])
+    help_text = capsys.readouterr().out
+    flags = sorted(set(re.findall(r"--([a-z0-9-]+)", help_text)))
+    ignored = {"help", "env-file", "lang"}
+    missing = [f"bridge.{f.replace('-', '_')}" for f in flags if f not in ignored and f"bridge.{f.replace('-', '_')}" not in cli_en.HELP]
+    assert missing == []
+
